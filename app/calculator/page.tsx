@@ -1,150 +1,994 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { useT } from "@/app/i18n/context";
+
+/* ───────── types ───────── */
+
+type DogSize = "small" | "medium" | "large" | "giant";
+type CostLevel = "low" | "average" | "high" | "veryHigh";
+type Acquisition = "adopt" | "buy";
+
+/* ───────── constants ───────── */
+
+const DOG_SIZE_KEYS: { key: DogSize; icon: string; defaultLbs: number }[] = [
+  { key: "small", icon: "🐕", defaultLbs: 10 },
+  { key: "medium", icon: "🦮", defaultLbs: 35 },
+  { key: "large", icon: "🐕‍🦺", defaultLbs: 75 },
+  { key: "giant", icon: "🐾", defaultLbs: 120 },
+];
+
+const COST_LEVEL_KEYS: { key: CostLevel; icon: string }[] = [
+  { key: "low", icon: "🏡" },
+  { key: "average", icon: "🏘️" },
+  { key: "high", icon: "🏙️" },
+  { key: "veryHigh", icon: "🌆" },
+];
+
+const CITY_MULT: Record<CostLevel, number> = {
+  low: 0.8,
+  average: 1.0,
+  high: 1.15,
+  veryHigh: 1.35,
+};
+
+type BySize = Record<DogSize, number>;
+
+const ACTIVITY_KEYS = ["inactive", "neutered", "intact", "active"] as const;
+const ACTIVITY_FACTORS: Record<string, number> = {
+  inactive: 1.0,
+  neutered: 1.6,
+  intact: 1.8,
+  active: 2.0,
+};
+
+const FOOD_TIER_KEYS = ["budget", "midRange", "premium", "ultra"] as const;
+const FOOD_TIER_PRICES: Record<string, number> = {
+  budget: 1.5,
+  midRange: 2.5,
+  premium: 3.5,
+  ultra: 5.0,
+};
+
+const LBS_TO_KG = 0.453592;
+const FOOD_KCAL_PER_KG = 3600;
+const DAYS_PER_MONTH = 30.44;
+
+const COSTS = {
+  initial: {
+    adopt: { small: 150, medium: 250, large: 300, giant: 350 } as BySize,
+    buy: { small: 1500, medium: 1200, large: 1000, giant: 1500 } as BySize,
+    spayNeuter: { small: 200, medium: 300, large: 400, giant: 500 } as BySize,
+    vetVisit: 200,
+    microchip: 50,
+    crate: { small: 35, medium: 55, large: 80, giant: 100 } as BySize,
+    bed: { small: 30, medium: 45, large: 65, giant: 85 } as BySize,
+    leashCollar: 40,
+    bowls: 20,
+    toys: 30,
+  },
+  monthly: {
+    treats: { small: 10, medium: 15, large: 20, giant: 25 } as BySize,
+    preventive: { small: 25, medium: 30, large: 35, giant: 40 } as BySize,
+    grooming: { small: 40, medium: 55, large: 70, giant: 85 } as BySize,
+    toysSupplies: 15,
+    wasteBags: 10,
+  },
+  annual: {
+    vetVisit: 250,
+    vaccines: 100,
+    dental: 300,
+    license: 20,
+  },
+  optional: {
+    insurance: { small: 35, medium: 45, large: 55, giant: 65 } as BySize,
+    training: 200,
+  },
+};
+
+/* ───────── food metabolic model ───────── */
+
+interface FoodCalc {
+  weightLbs: number;
+  weightKg: number;
+  weightKg075: number;
+  rer: number;
+  activityFactor: number;
+  mer: number;
+  dailyKg: number;
+  dailyLbs: number;
+  monthlyLbs: number;
+  pricePerLb: number;
+  monthlyCost: number;
+}
+
+function calcFood(
+  weightLbs: number,
+  activityFactor: number,
+  pricePerLb: number,
+): FoodCalc {
+  const weightKg = weightLbs * LBS_TO_KG;
+  const weightKg075 = Math.pow(weightKg, 0.75);
+  const rer = 70 * weightKg075;
+  const mer = rer * activityFactor;
+  const dailyKg = mer / FOOD_KCAL_PER_KG;
+  const dailyLbs = dailyKg / LBS_TO_KG;
+  const monthlyLbs = dailyLbs * DAYS_PER_MONTH;
+  const monthlyCost = monthlyLbs * pricePerLb;
+  return {
+    weightLbs,
+    weightKg,
+    weightKg075,
+    rer,
+    activityFactor,
+    mer,
+    dailyKg,
+    dailyLbs,
+    monthlyLbs,
+    pricePerLb,
+    monthlyCost,
+  };
+}
+
+/* ───────── helpers ───────── */
+
+const fmt = (n: number) => n.toLocaleString("en-US");
+const fd = (n: number, d = 2) => n.toFixed(d);
+const adj = (base: number, mult: number) => Math.round(base * mult);
+
+const BAR_COLORS: Record<string, string> = {
+  Food: "bg-emerald-500",
+  Treats: "bg-lime-500",
+  "Preventive Meds": "bg-blue-500",
+  Grooming: "bg-purple-500",
+  "Toys & Supplies": "bg-amber-500",
+  "Waste Bags": "bg-gray-400",
+  Insurance: "bg-cyan-500",
+};
+
+/* ═══════════════════ Calculator ═══════════════════ */
 
 export default function Calculator() {
-  const [size, setSize] = useState("medium");
-  const [cityLevel, setCityLevel] = useState("average");
+  const t = useT();
+
+  /* ── core state ── */
+  const [size, setSize] = useState<DogSize>("medium");
+  const [costLevel, setCostLevel] = useState<CostLevel>("average");
+  const [acquisition, setAcquisition] = useState<Acquisition>("adopt");
   const [insurance, setInsurance] = useState(false);
+  const [training, setTraining] = useState(false);
 
-  const baseFood = {
-    small: 40,
-    medium: 70,
-    large: 110,
+  /* ── food detail state ── */
+  const [foodOpen, setFoodOpen] = useState(false);
+  const [customWeight, setCustomWeight] = useState("");
+  const [activityKey, setActivityKey] = useState("neutered");
+  const [foodTierKey, setFoodTierKey] = useState("midRange");
+  const [customFoodPrice, setCustomFoodPrice] = useState("");
+
+  const handleSizeChange = (s: DogSize) => {
+    setSize(s);
+    setCustomWeight("");
   };
 
-  const cityMultiplier = {
-    low: 0.85,
-    average: 1,
-    high: 1.25,
+  /* ── food computation ── */
+  const defaultWeight =
+    DOG_SIZE_KEYS.find((d) => d.key === size)!.defaultLbs;
+  const effectiveWeight = customWeight
+    ? Math.max(1, parseFloat(customWeight) || defaultWeight)
+    : defaultWeight;
+  const activityFactor = ACTIVITY_FACTORS[activityKey] ?? 1.6;
+  const tierPrice = FOOD_TIER_PRICES[foodTierKey] ?? 2.5;
+  const effectiveFoodPrice = customFoodPrice
+    ? Math.max(0.01, parseFloat(customFoodPrice) || tierPrice)
+    : tierPrice;
+
+  const foodCalc = useMemo(
+    () => calcFood(effectiveWeight, activityFactor, effectiveFoodPrice),
+    [effectiveWeight, activityFactor, effectiveFoodPrice],
+  );
+
+  const handleFoodTier = (key: string) => {
+    setFoodTierKey(key);
+    setCustomFoodPrice("");
   };
 
-  const monthlyFood = baseFood[size as keyof typeof baseFood];
-  const preventive = 25;
-  const grooming = 60;
-  const insuranceCost = insurance ? 45 : 0;
-  const annualVet = 300;
+  /* ── label map (translate internal keys → display) ── */
+  const L: Record<string, string> = {
+    Food: t.calc.food,
+    Treats: t.calc.treats,
+    "Preventive Meds": t.calc.preventiveMeds,
+    Grooming: t.calc.grooming,
+    "Toys & Supplies": t.calc.toysSupplies,
+    "Waste Bags": t.calc.wasteBags,
+    Insurance: t.calc.insuranceItem,
+    "Vet Wellness Visit": t.calc.vetVisit,
+    "Vaccines & Boosters": t.calc.vaccines,
+    "Dental Cleaning": t.calc.dentalCleaning,
+    "License / Registration": t.calc.license,
+    "Adoption Fee": t.calc.adoptionFee,
+    "Purchase Price": t.calc.purchasePrice,
+    "Spay / Neuter": t.calc.spayNeuter,
+    "First Vet Visit": t.calc.firstVetVisit,
+    Microchip: t.calc.microchip,
+    "Starter Supplies": t.calc.starterSupplies,
+    "Training Classes": t.calc.trainingClasses,
+  };
 
-  const monthlyTotal =
-    (monthlyFood + preventive + grooming + insuranceCost) *
-    cityMultiplier[cityLevel as keyof typeof cityMultiplier];
+  /* ── overall costs ── */
+  const cityMult = CITY_MULT[costLevel];
 
-  const yearlyTotal = monthlyTotal * 12 + annualVet;
-  const firstYearTotal = yearlyTotal + 600;
+  const costs = useMemo(() => {
+    const m = cityMult;
+    const food = Math.round(foodCalc.monthlyCost * m);
+
+    const acqCost = adj(
+      acquisition === "adopt"
+        ? COSTS.initial.adopt[size]
+        : COSTS.initial.buy[size],
+      m,
+    );
+    const spayNeuter = adj(COSTS.initial.spayNeuter[size], m);
+    const initVet = adj(COSTS.initial.vetVisit, m);
+    const microchip = adj(COSTS.initial.microchip, m);
+    const supplies =
+      adj(COSTS.initial.crate[size], m) +
+      adj(COSTS.initial.bed[size], m) +
+      adj(COSTS.initial.leashCollar, m) +
+      adj(COSTS.initial.bowls, m) +
+      adj(COSTS.initial.toys, m);
+    const totalInitial = acqCost + spayNeuter + initVet + microchip + supplies;
+
+    const treats = adj(COSTS.monthly.treats[size], m);
+    const preventive = adj(COSTS.monthly.preventive[size], m);
+    const grooming = adj(COSTS.monthly.grooming[size], m);
+    const toysSupplies = adj(COSTS.monthly.toysSupplies, m);
+    const wasteBags = adj(COSTS.monthly.wasteBags, m);
+    const insuranceMo = insurance
+      ? adj(COSTS.optional.insurance[size], m)
+      : 0;
+    const totalMonthly =
+      food +
+      treats +
+      preventive +
+      grooming +
+      toysSupplies +
+      wasteBags +
+      insuranceMo;
+
+    const monthlyItems: {
+      label: string;
+      value: number;
+      expandable?: boolean;
+    }[] = [
+      { label: "Food", value: food, expandable: true },
+      { label: "Treats", value: treats },
+      { label: "Preventive Meds", value: preventive },
+      { label: "Grooming", value: grooming },
+      { label: "Toys & Supplies", value: toysSupplies },
+      { label: "Waste Bags", value: wasteBags },
+      ...(insurance ? [{ label: "Insurance", value: insuranceMo }] : []),
+    ];
+
+    const vetVisit = adj(COSTS.annual.vetVisit, m);
+    const vaccines = adj(COSTS.annual.vaccines, m);
+    const dental = adj(COSTS.annual.dental, m);
+    const license = adj(COSTS.annual.license, m);
+    const trainingCost = training ? adj(COSTS.optional.training, m) : 0;
+    const totalAnnualFixed = vetVisit + vaccines + dental + license;
+
+    const annualItems = [
+      { label: "Vet Wellness Visit", value: vetVisit },
+      { label: "Vaccines & Boosters", value: vaccines },
+      { label: "Dental Cleaning", value: dental },
+      { label: "License / Registration", value: license },
+    ];
+
+    const annualTotal = totalMonthly * 12 + totalAnnualFixed;
+    const firstYear = annualTotal + totalInitial + trainingCost;
+
+    return {
+      initial: {
+        items: [
+          {
+            label:
+              acquisition === "adopt" ? "Adoption Fee" : "Purchase Price",
+            value: acqCost,
+          },
+          { label: "Spay / Neuter", value: spayNeuter },
+          { label: "First Vet Visit", value: initVet },
+          { label: "Microchip", value: microchip },
+          { label: "Starter Supplies", value: supplies },
+          ...(training
+            ? [{ label: "Training Classes", value: trainingCost }]
+            : []),
+        ],
+        total: totalInitial + trainingCost,
+      },
+      monthly: { items: monthlyItems, total: totalMonthly },
+      annual: { items: annualItems, total: totalAnnualFixed },
+      summary: { monthly: totalMonthly, annual: annualTotal, firstYear },
+      lifetime: {
+        year5: firstYear + annualTotal * 4,
+        year10: firstYear + annualTotal * 9,
+        year15: firstYear + annualTotal * 14,
+      },
+    };
+  }, [size, cityMult, acquisition, insurance, training, foodCalc.monthlyCost]);
+
+  const maxMonthly = Math.max(...costs.monthly.items.map((i) => i.value));
+
+  /* ════════ render ════════ */
 
   return (
-    <main className="min-h-screen p-8 max-w-3xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6">Dog Cost Calculator</h1>
+    <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:py-14">
+      {/* Header */}
+      <header className="mb-12 text-center">
+        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+          {t.calc.title}
+        </h1>
+        <p className="mx-auto mt-3 max-w-xl text-muted">{t.calc.subtitle}</p>
+      </header>
 
-      <div className="space-y-4 mb-6">
-        <div>
-          <label className="block mb-2">Dog Size</label>
-          <select
-            className="border p-2 w-full"
-            value={size}
-            onChange={(e) => setSize(e.target.value)}
-          >
-            <option value="small">Small (0–20 lbs)</option>
-            <option value="medium">Medium (20–50 lbs)</option>
-            <option value="large">Large (50+ lbs)</option>
-          </select>
-        </div>
+      <div className="lg:grid lg:grid-cols-[380px_1fr] lg:gap-10">
+        {/* ── Left: Inputs ── */}
+        <aside className="mb-10 space-y-8 lg:sticky lg:top-24 lg:mb-0 lg:self-start">
+          {/* Dog Size */}
+          <fieldset>
+            <legend className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
+              {t.calc.dogSize}
+            </legend>
+            <div className="grid grid-cols-2 gap-3">
+              {DOG_SIZE_KEYS.map((d) => {
+                const s = t.calc.sizes[d.key];
+                return (
+                  <button
+                    key={d.key}
+                    onClick={() => handleSizeChange(d.key)}
+                    className={`flex flex-col items-center gap-1 rounded-xl border-2 p-4 text-center transition-all ${
+                      size === d.key
+                        ? "border-primary bg-primary/5 shadow-sm"
+                        : "border-border/60 bg-surface hover:border-primary/30"
+                    }`}
+                  >
+                    <span className="text-2xl">{d.icon}</span>
+                    <span className="text-sm font-semibold">{s.label}</span>
+                    <span className="text-[11px] text-muted">{s.weight}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
 
-        <div>
-          <label className="block mb-2">City Cost Level</label>
-          <select
-            className="border p-2 w-full"
-            value={cityLevel}
-            onChange={(e) => setCityLevel(e.target.value)}
-          >
-            <option value="low">Low</option>
-            <option value="average">Average</option>
-            <option value="high">High</option>
-          </select>
-        </div>
+          {/* City Cost Level */}
+          <fieldset>
+            <legend className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
+              {t.calc.cityLevel}
+            </legend>
+            <div className="grid grid-cols-2 gap-3">
+              {COST_LEVEL_KEYS.map((c) => {
+                const lv = t.calc.levels[c.key];
+                return (
+                  <button
+                    key={c.key}
+                    onClick={() => setCostLevel(c.key)}
+                    className={`flex flex-col items-center gap-1 rounded-xl border-2 p-4 text-center transition-all ${
+                      costLevel === c.key
+                        ? "border-primary bg-primary/5 shadow-sm"
+                        : "border-border/60 bg-surface hover:border-primary/30"
+                    }`}
+                  >
+                    <span className="text-2xl">{c.icon}</span>
+                    <span className="text-sm font-semibold">{lv.label}</span>
+                    <span className="text-[11px] text-muted">{lv.desc}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
 
-        <div>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
+          {/* Acquisition */}
+          <fieldset>
+            <legend className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
+              {t.calc.gettingDog}
+            </legend>
+            <div className="flex gap-3">
+              {(["adopt", "buy"] as const).map((opt) => (
+                <button
+                  key={opt}
+                  onClick={() => setAcquisition(opt)}
+                  className={`flex-1 rounded-xl border-2 py-3 text-sm font-semibold transition-all ${
+                    acquisition === opt
+                      ? "border-primary bg-primary/5"
+                      : "border-border/60 bg-surface hover:border-primary/30"
+                  }`}
+                >
+                  {opt === "adopt" ? t.calc.adopt : t.calc.purchase}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          {/* Toggles */}
+          <div className="space-y-4">
+            <Toggle
+              label={t.calc.insuranceLabel}
+              desc={t.calc.insuranceDesc}
               checked={insurance}
-              onChange={(e) => setInsurance(e.target.checked)}
+              onChange={setInsurance}
             />
-            Include Insurance
-          </label>
+            <Toggle
+              label={t.calc.trainingLabel}
+              desc={t.calc.trainingDesc}
+              checked={training}
+              onChange={setTraining}
+            />
+          </div>
+        </aside>
+
+        {/* ── Right: Results ── */}
+        <section className="space-y-6">
+          {/* Summary Card */}
+          <div className="overflow-hidden rounded-2xl bg-primary p-8 text-white shadow-xl shadow-primary/15">
+            <p className="text-sm font-medium uppercase tracking-wider text-white/70">
+              {t.calc.firstYearCost}
+            </p>
+            <p className="mt-2 text-5xl font-bold tabular-nums tracking-tight">
+              ${fmt(costs.summary.firstYear)}
+            </p>
+            <div className="mt-8 grid grid-cols-2 gap-6 border-t border-white/15 pt-6">
+              <div>
+                <p className="text-sm text-white/60">{t.calc.monthlyAvg}</p>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  ${fmt(costs.summary.monthly)}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-white/60">{t.calc.annualAfter}</p>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  ${fmt(costs.summary.annual)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Monthly Breakdown */}
+          <SectionCard
+            title={t.calc.monthlyTitle}
+            total={costs.monthly.total}
+            suffix={t.calc.perMo}
+          >
+            <div className="space-y-1">
+              {costs.monthly.items.map((item) => {
+                const isFood = item.label === "Food";
+                return (
+                  <div key={item.label}>
+                    {isFood ? (
+                      <button
+                        onClick={() => setFoodOpen((o) => !o)}
+                        className="group -mx-2 flex w-[calc(100%+16px)] items-center gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-foreground/[.03]"
+                      >
+                        <span className="w-32 shrink-0 text-left text-sm text-muted transition-colors group-hover:text-foreground">
+                          {L[item.label]}
+                          <span className="ml-1 inline-block text-[10px] text-primary/60">
+                            {t.calc.details}
+                          </span>
+                        </span>
+                        <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-foreground/[.06]">
+                          <div
+                            className={`cost-bar h-full rounded-full ${BAR_COLORS.Food}`}
+                            style={{
+                              width: `${(item.value / maxMonthly) * 100}%`,
+                            }}
+                          />
+                        </div>
+                        <span className="w-14 text-right text-sm font-semibold tabular-nums">
+                          ${fmt(item.value)}
+                        </span>
+                        <Chevron open={foodOpen} />
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-3 py-2">
+                        <span className="w-32 shrink-0 text-sm text-muted">
+                          {L[item.label] ?? item.label}
+                        </span>
+                        <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-foreground/[.06]">
+                          <div
+                            className={`cost-bar h-full rounded-full ${BAR_COLORS[item.label] ?? "bg-gray-400"}`}
+                            style={{
+                              width: `${(item.value / maxMonthly) * 100}%`,
+                            }}
+                          />
+                        </div>
+                        <span className="w-14 text-right text-sm font-semibold tabular-nums">
+                          ${fmt(item.value)}
+                        </span>
+                        <span className="w-4 shrink-0" />
+                      </div>
+                    )}
+
+                    {isFood && (
+                      <div
+                        className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${
+                          foodOpen
+                            ? "grid-rows-[1fr]"
+                            : "grid-rows-[0fr]"
+                        }`}
+                      >
+                        <div className="overflow-hidden">
+                          <FoodDetail
+                            t={t}
+                            calc={foodCalc}
+                            defaultWeight={defaultWeight}
+                            customWeight={customWeight}
+                            onWeightChange={setCustomWeight}
+                            activityKey={activityKey}
+                            onActivityChange={setActivityKey}
+                            foodTierKey={foodTierKey}
+                            onFoodTierChange={handleFoodTier}
+                            customFoodPrice={customFoodPrice}
+                            onPriceChange={setCustomFoodPrice}
+                            cityMult={cityMult}
+                            adjustedCost={Math.round(
+                              foodCalc.monthlyCost * cityMult,
+                            )}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </SectionCard>
+
+          {/* Annual Fixed Costs */}
+          <SectionCard
+            title={t.calc.annualTitle}
+            total={costs.annual.total}
+            suffix={t.calc.perYr}
+          >
+            <div className="divide-y divide-border/40">
+              {costs.annual.items.map((item) => (
+                <div
+                  key={item.label}
+                  className="flex items-center justify-between py-3 first:pt-0 last:pb-0"
+                >
+                  <span className="text-sm text-muted">
+                    {L[item.label] ?? item.label}
+                  </span>
+                  <span className="text-sm font-semibold tabular-nums">
+                    ${fmt(item.value)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+
+          {/* Initial Setup Costs */}
+          <SectionCard
+            title={t.calc.setupTitle}
+            total={costs.initial.total}
+            suffix={t.calc.oneTime}
+          >
+            <div className="divide-y divide-border/40">
+              {costs.initial.items.map((item) => (
+                <div
+                  key={item.label}
+                  className="flex items-center justify-between py-3 first:pt-0 last:pb-0"
+                >
+                  <span className="text-sm text-muted">
+                    {L[item.label] ?? item.label}
+                  </span>
+                  <span className="text-sm font-semibold tabular-nums">
+                    ${fmt(item.value)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+
+          {/* Lifetime Projection */}
+          <div className="rounded-2xl border border-border/60 bg-surface p-6">
+            <h3 className="text-lg font-semibold">{t.calc.lifetimeTitle}</h3>
+            <p className="mt-1 text-sm text-muted">{t.calc.lifetimeDesc}</p>
+            <div className="mt-6 grid grid-cols-3 gap-4">
+              {[
+                { yr: 5, val: costs.lifetime.year5 },
+                { yr: 10, val: costs.lifetime.year10 },
+                { yr: 15, val: costs.lifetime.year15 },
+              ].map(({ yr, val }) => (
+                <div
+                  key={yr}
+                  className="rounded-xl bg-background p-5 text-center"
+                >
+                  <p className="text-sm text-muted">
+                    {yr} {t.calc.years}
+                  </p>
+                  <p className="mt-1 text-xl font-bold tabular-nums text-primary">
+                    ${fmt(val)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Disclaimer */}
+          <p className="text-center text-xs text-muted/70">
+            {t.calc.disclaimerBefore}
+            <a href="/method" className="underline hover:text-primary">
+              {t.calc.disclaimerLink}
+            </a>
+            {t.calc.disclaimerAfter}
+          </p>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+/* ═══════════════════ Food Detail Panel ═══════════════════ */
+
+function FoodDetail({
+  t,
+  calc,
+  defaultWeight,
+  customWeight,
+  onWeightChange,
+  activityKey,
+  onActivityChange,
+  foodTierKey,
+  onFoodTierChange,
+  customFoodPrice,
+  onPriceChange,
+  cityMult,
+  adjustedCost,
+}: {
+  t: ReturnType<typeof useT>;
+  calc: FoodCalc;
+  defaultWeight: number;
+  customWeight: string;
+  onWeightChange: (v: string) => void;
+  activityKey: string;
+  onActivityChange: (v: string) => void;
+  foodTierKey: string;
+  onFoodTierChange: (k: string) => void;
+  customFoodPrice: string;
+  onPriceChange: (v: string) => void;
+  cityMult: number;
+  adjustedCost: number;
+}) {
+  const ft = t.calc.foodDetail;
+  const ta = t.calc.activity;
+  const tf = t.calc.foodTiers;
+
+  return (
+    <div className="mb-3 mt-2 rounded-xl border border-border/60 bg-background p-5">
+      {/* ── Calculation Steps ── */}
+      <h4 className="text-sm font-semibold">{ft.howTitle}</h4>
+      <p className="mt-1 text-xs leading-relaxed text-muted">{ft.howDesc}</p>
+
+      <div className="mt-4 space-y-2.5">
+        <Step
+          n={1}
+          label={ft.step1}
+          formula={`${fd(calc.weightLbs, 0)} lbs × 0.4536`}
+          result={`${fd(calc.weightKg, 2)} kg`}
+        />
+        <Step
+          n={2}
+          label={ft.step2}
+          formula={`70 × ${fd(calc.weightKg, 2)}^0.75 (=${fd(calc.weightKg075, 2)})`}
+          result={`${fd(calc.rer, 0)} kcal / day`}
+        />
+        <Step
+          n={3}
+          label={ft.step3}
+          formula={`${fd(calc.rer, 0)} × ${calc.activityFactor} (${ft.activityFactor})`}
+          result={`${fd(calc.mer, 0)} kcal / day`}
+        />
+        <Step
+          n={4}
+          label={ft.step4}
+          formula={`${fd(calc.mer, 0)} ÷ ${fmt(FOOD_KCAL_PER_KG)} kcal/kg`}
+          result={`${fd(calc.dailyKg, 3)} kg (${fd(calc.dailyLbs, 2)} lbs)`}
+        />
+        <Step
+          n={5}
+          label={ft.step5}
+          formula={`${fd(calc.dailyLbs, 2)} lbs × ${DAYS_PER_MONTH} days`}
+          result={`${fd(calc.monthlyLbs, 1)} lbs / mo`}
+        />
+        <Step
+          n={6}
+          label={ft.step6}
+          formula={`${fd(calc.monthlyLbs, 1)} × $${fd(calc.pricePerLb, 2)}/lb`}
+          result={`$${fd(calc.monthlyCost, 2)}`}
+        />
+        {cityMult !== 1.0 && (
+          <Step
+            n={7}
+            label={ft.step7}
+            formula={`$${fd(calc.monthlyCost, 2)} × ${cityMult}`}
+            result={`$${fmt(adjustedCost)} / mo`}
+            highlight
+          />
+        )}
+      </div>
+
+      {/* ── Customize ── */}
+      <div className="mt-5 border-t border-border/40 pt-5">
+        <h4 className="text-sm font-semibold">{ft.customizeTitle}</h4>
+        <p className="mt-0.5 text-[11px] text-muted">{ft.customizeDesc}</p>
+
+        {/* Weight */}
+        <label className="mt-4 block">
+          <span className="text-xs font-medium text-muted">
+            {ft.weightLabel}
+          </span>
+          <div className="relative mt-1">
+            <input
+              type="number"
+              inputMode="decimal"
+              min={1}
+              max={300}
+              step={1}
+              placeholder={`${defaultWeight} (${ft.defaultForSize})`}
+              value={customWeight}
+              onChange={(e) => onWeightChange(e.target.value)}
+              className="w-full rounded-lg border border-border bg-surface px-3 py-2 pr-12 text-sm tabular-nums outline-none transition-colors placeholder:text-muted/50 focus:border-primary"
+            />
+            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted">
+              {ft.weightUnit}
+            </span>
+          </div>
+          {customWeight && (
+            <button
+              onClick={() => onWeightChange("")}
+              className="mt-1 text-[11px] text-primary hover:underline"
+            >
+              {ft.resetTo} ({defaultWeight} lbs)
+            </button>
+          )}
+        </label>
+
+        {/* Activity Level */}
+        <div className="mt-4">
+          <span className="text-xs font-medium text-muted">
+            {ft.activityLabel}
+          </span>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {ACTIVITY_KEYS.map((k) => {
+              const a = ta[k as keyof typeof ta];
+              return (
+                <button
+                  key={k}
+                  onClick={() => onActivityChange(k)}
+                  title={a.desc}
+                  className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-all ${
+                    activityKey === k
+                      ? "bg-primary text-white shadow-sm"
+                      : "bg-foreground/[.06] text-muted hover:bg-foreground/[.10]"
+                  }`}
+                >
+                  {a.label} ({ACTIVITY_FACTORS[k]}×)
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-1 text-[10px] text-muted/60">
+            {ta[activityKey as keyof typeof ta]?.desc} · {ft.factorNote}
+          </p>
+        </div>
+
+        {/* Food Quality */}
+        <div className="mt-4">
+          <span className="text-xs font-medium text-muted">
+            {ft.foodQualityLabel}
+          </span>
+          <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+            {FOOD_TIER_KEYS.map((k) => {
+              const tier = tf[k as keyof typeof tf];
+              return (
+                <button
+                  key={k}
+                  onClick={() => onFoodTierChange(k)}
+                  title={tier.desc}
+                  className={`rounded-lg px-2 py-2 text-center transition-all ${
+                    foodTierKey === k && !customFoodPrice
+                      ? "bg-primary text-white shadow-sm"
+                      : "bg-foreground/[.06] text-muted hover:bg-foreground/[.10]"
+                  }`}
+                >
+                  <span className="block text-[11px] font-medium">
+                    {tier.label}
+                  </span>
+                  <span className="block text-[10px] opacity-70">
+                    ${FOOD_TIER_PRICES[k].toFixed(2)}/lb
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="text-[11px] text-muted">{ft.orCustom}</span>
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-muted">$</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0.01}
+                step={0.1}
+                placeholder={
+                  FOOD_TIER_PRICES[foodTierKey]?.toFixed(2) ?? "2.50"
+                }
+                value={customFoodPrice}
+                onChange={(e) => onPriceChange(e.target.value)}
+                className="w-20 rounded-lg border border-border bg-surface px-2 py-1 text-xs tabular-nums outline-none transition-colors placeholder:text-muted/50 focus:border-primary"
+              />
+              <span className="text-[11px] text-muted">{ft.perLb}</span>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="bg-gray-100 p-6 rounded-xl">
-        <h2 className="text-xl font-semibold mb-2">Estimated Costs</h2>
-        <p className="text-lg">
-        Monthly Cost: <span className="font-semibold">${monthlyTotal.toFixed(0)}</span>
+      {/* ── Sources ── */}
+      <div className="mt-5 border-t border-border/40 pt-4">
+        <p className="text-[11px] font-semibold text-muted">
+          {ft.sourcesTitle}
         </p>
-
-        <p className="text-lg">
-        Annual Cost: <span className="font-semibold">${yearlyTotal.toFixed(0)}</span>
-        </p>
-
-        <p className="text-lg">
-        First Year Total (with setup): <span className="font-semibold">
-            ${firstYearTotal.toFixed(0)}
-        </span>
+        <ul className="mt-1.5 space-y-1 text-[11px] leading-relaxed text-muted/70">
+          <li className="flex items-start gap-1.5">
+            <span className="mt-px shrink-0">📄</span>
+            <span>
+              <a
+                href="https://www.aaha.org/nutrition"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-primary"
+              >
+                {ft.aahaTitle}
+              </a>{" "}
+              {ft.aahaDesc}
+            </span>
+          </li>
+          <li className="flex items-start gap-1.5">
+            <span className="mt-px shrink-0">🔗</span>
+            <span>
+              <a
+                href="https://www.purina.com/articles/dog/feeding/guides/how-much-should-i-feed-my-dog"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-primary"
+              >
+                {ft.purinaTitle}
+              </a>{" "}
+              {ft.purinaDesc}
+            </span>
+          </li>
+          <li className="flex items-start gap-1.5">
+            <span className="mt-px shrink-0">🛒</span>
+            <span>{ft.retailNote}</span>
+          </li>
+        </ul>
+        <p className="mt-2 text-[10px] text-muted/50">
+          {ft.energyNote.replace("{kcal}", fmt(FOOD_KCAL_PER_KG))}
         </p>
       </div>
-
-      <div className="mt-10">
-  <h2 className="text-2xl font-bold mb-4">
-    Recommended Essentials
-  </h2>
-
-  <div className="grid gap-4">
-
-    <div className="border p-4 rounded-lg">
-      <h3 className="font-semibold">Dog Crate</h3>
-      <p className="text-sm text-gray-600 mb-2">
-        Choose a size appropriate crate for your dog. Helps with training and safety.
-      </p>
-      <a
-        href="#"
-        className="text-blue-600 underline"
-        target="_blank"
-      >
-        View on Amazon
-      </a>
     </div>
+  );
+}
 
-    <div className="border p-4 rounded-lg">
-      <h3 className="font-semibold">Dry Dog Food</h3>
-      <p className="text-sm text-gray-600 mb-2">
-        High-quality dry food based on your dog's size and life stage.
-      </p>
-      <a
-        href="#"
-        className="text-blue-600 underline"
-        target="_blank"
-      >
-        View on Amazon
-      </a>
+/* ═══════════════════ Shared Sub-Components ═══════════════════ */
+
+function Step({
+  n,
+  label,
+  formula,
+  result,
+  highlight,
+}: {
+  n: number;
+  label: string;
+  formula: string;
+  result: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-start gap-3 rounded-lg px-2 py-1.5 ${
+        highlight ? "bg-primary/5" : ""
+      }`}
+    >
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
+        {n}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-medium text-muted">{label}</p>
+        <p className="mt-0.5 font-mono text-xs leading-relaxed text-foreground/70">
+          {formula} ={" "}
+          <span className="font-semibold text-foreground">{result}</span>
+        </p>
+      </div>
     </div>
+  );
+}
 
-    <div className="border p-4 rounded-lg">
-      <h3 className="font-semibold">Flea & Tick Prevention</h3>
-      <p className="text-sm text-gray-600 mb-2">
-        Monthly preventive medication is essential for US households.
-      </p>
-      <a
-        href="#"
-        className="text-blue-600 underline"
-        target="_blank"
-      >
-        View on Amazon
-      </a>
+function SectionCard({
+  title,
+  total,
+  suffix,
+  children,
+}: {
+  title: string;
+  total: number;
+  suffix: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-border/60 bg-surface p-6">
+      <div className="mb-5 flex items-baseline justify-between">
+        <h3 className="text-lg font-semibold">{title}</h3>
+        <span className="text-sm font-semibold tabular-nums text-primary">
+          ${fmt(total)}
+          <span className="font-normal text-muted">{suffix}</span>
+        </span>
+      </div>
+      {children}
     </div>
+  );
+}
 
-  </div>
-</div>
+function Toggle({
+  label,
+  desc,
+  checked,
+  onChange,
+}: {
+  label: string;
+  desc: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between rounded-xl border border-border/60 bg-surface p-4 text-left transition-colors hover:border-primary/30"
+    >
+      <div>
+        <p className="text-sm font-semibold">{label}</p>
+        <p className="text-xs text-muted">{desc}</p>
+      </div>
+      <div
+        className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+          checked ? "bg-primary" : "bg-foreground/15"
+        }`}
+      >
+        <div
+          className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+            checked ? "translate-x-5" : ""
+          }`}
+        />
+      </div>
+    </button>
+  );
+}
 
-
-    </main>
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      className={`h-4 w-4 shrink-0 text-muted transition-transform duration-200 ${
+        open ? "rotate-180" : ""
+      }`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
   );
 }

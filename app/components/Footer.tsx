@@ -1,28 +1,53 @@
+"use client";
+
+import Link from "next/link";
+import { useT } from "@/app/i18n/context";
+
 export default function Footer() {
+  const t = useT();
+
   return (
-    <footer className="mt-20 border-t pt-8 pb-6 text-sm text-gray-500">
-      <div className="max-w-4xl mx-auto px-6 space-y-4 text-center">
+    <footer className="border-t border-border bg-surface">
+      <div className="mx-auto max-w-6xl px-6 py-12">
+        <div className="flex flex-col items-center gap-8 text-center">
+          <div>
+            <Link
+              href="/"
+              className="inline-flex items-center gap-2 text-lg font-bold text-foreground"
+            >
+              <span className="text-xl">🐾</span>
+              PetPat
+            </Link>
+            <p className="mt-2 max-w-md text-sm text-muted">
+              {t.footer.desc}
+            </p>
+          </div>
 
-        <p>
-          PetPat is an independent dog cost estimation tool built for families
-          and international students in the United States.
-        </p>
+          <div className="flex gap-8 text-sm">
+            <Link
+              href="/calculator"
+              className="text-muted transition-colors hover:text-foreground"
+            >
+              {t.nav.calculator}
+            </Link>
+            <Link
+              href="/method"
+              className="text-muted transition-colors hover:text-foreground"
+            >
+              {t.nav.method}
+            </Link>
+          </div>
 
-        <p>
-          This website provides estimated cost ranges for educational purposes only.
-          Actual expenses may vary depending on location, breed, and lifestyle.
-        </p>
-
-        <p>
-          Disclosure: PetPat may participate in affiliate programs in the future.
-          If you purchase products through affiliate links, we may earn a small
-          commission at no extra cost to you.
-        </p>
-
-        <p className="text-xs text-gray-400">
-          © {new Date().getFullYear()} PetPat. All rights reserved.
-        </p>
-
+          <div className="w-full border-t border-border pt-6">
+            <p className="text-xs text-muted">{t.footer.disclaimer}</p>
+            <p className="mt-2 text-xs text-muted/60">
+              {t.footer.copyright.replace(
+                "{year}",
+                String(new Date().getFullYear()),
+              )}
+            </p>
+          </div>
+        </div>
       </div>
     </footer>
   );
