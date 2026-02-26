@@ -3,7 +3,7 @@
 const en = {
   nav: {
     calculator: "Calculator",
-    method: "Methodology",
+    method: "Support",
   },
   footer: {
     desc: "A transparent dog ownership cost calculator built for families and international students in the United States.",
@@ -114,10 +114,10 @@ const en = {
     starterSupplies: "Starter Supplies",
     trainingClasses: "Training Classes",
     sizes: {
-      small: { label: "Small", weight: "Under 20 lbs" },
-      medium: { label: "Medium", weight: "20 – 50 lbs" },
-      large: { label: "Large", weight: "50 – 100 lbs" },
-      giant: { label: "Giant", weight: "Over 100 lbs" },
+      small: { label: "Small", weight: "Under 20 lbs", weightKg: "Under 9 kg" },
+      medium: { label: "Medium", weight: "20 – 50 lbs", weightKg: "9 – 23 kg" },
+      large: { label: "Large", weight: "50 – 100 lbs", weightKg: "23 – 45 kg" },
+      giant: { label: "Giant", weight: "Over 100 lbs", weightKg: "Over 45 kg" },
     },
     levels: {
       low: { label: "Low Cost", desc: "Rural / Small Town" },
@@ -153,7 +153,11 @@ const en = {
       customizeDesc:
         "Override defaults with your dog's real data for a more accurate estimate.",
       weightLabel: "Your Dog's Weight (lbs)",
+      weightLabelLb: "Your Dog's Weight (lbs)",
+      weightLabelKg: "Your Dog's Weight (kg)",
       weightUnit: "lbs",
+      weightUnitLb: "lbs",
+      weightUnitKg: "kg",
       defaultForSize: "default for size",
       resetTo: "Reset to default",
       activityLabel: "Activity Level",
@@ -171,9 +175,27 @@ const en = {
       energyNote:
         "Avg dry food energy density assumed at {kcal} kcal/kg. Actual density varies by brand (typically 3,200 – 4,000 kcal/kg).",
     },
+    costDetailBack: "Back to calculator",
+    costDetailHint: "Click a slice to view details",
+    simpleDetailDesc:
+      "Estimated based on dog size. Override with a custom amount if needed.",
+    customAmount: "Custom amount",
+    perMoShort: "/mo",
+    breed: {
+      title: "What breed is your dog?",
+      subtitle:
+        "Select your dog's breed for a more accurate cost estimate based on real weight data.",
+      searchPlaceholder: "Search breeds...",
+      skip: "Skip for now",
+      skipDesc: "My breed isn't listed / I'll choose size manually",
+      changeBreed: "Change breed",
+      noResults: "No breeds match your search",
+      lbs: "lbs",
+      or: "or",
+    },
   },
   method: {
-    title: "Methodology & Assumptions",
+    title: "Support",
     desc: "PetPat's estimates are built from publicly available market-price data for pet food, veterinary services, grooming, and supplies across the United States. Here is how the numbers are calculated.",
     costCategoriesTitle: "Cost Categories",
     categories: [
@@ -261,6 +283,19 @@ const en = {
     ],
     lastUpdated:
       "Last updated: February 2026. Cost data is reviewed and adjusted periodically.",
+    feedbackTitle: "Send Feedback",
+    feedbackDesc: "Have a question or suggestion? We'd love to hear from you.",
+    feedbackName: "Your name",
+    feedbackEmail: "Your email",
+    feedbackSummary: "Brief description of your feedback",
+    feedbackSummaryPlaceholder: "Summarize in a few words...",
+    feedbackSummaryLimit: "Max 100 characters (English) or 30 characters (Chinese)",
+    feedbackBody: "Your feedback",
+    feedbackBodyPlaceholder: "Your feedback, questions, or suggestions...",
+    feedbackSend: "Send",
+    feedbackSending: "Sending...",
+    feedbackSuccess: "Thank you! Your feedback has been sent.",
+    feedbackError: "Failed to send. Please try again later.",
   },
 };
 
@@ -271,7 +306,7 @@ type Dict = typeof en;
 const zh: Dict = {
   nav: {
     calculator: "成本计算",
-    method: "计算方法",
+    method: "支持",
   },
   footer: {
     desc: "一款透明的养狗成本计算器，专为美国家庭和留学生设计。",
@@ -379,10 +414,10 @@ const zh: Dict = {
     starterSupplies: "初始用品",
     trainingClasses: "训练课程",
     sizes: {
-      small: { label: "小型", weight: "20 磅以下" },
-      medium: { label: "中型", weight: "20 – 50 磅" },
-      large: { label: "大型", weight: "50 – 100 磅" },
-      giant: { label: "巨型", weight: "100 磅以上" },
+      small: { label: "小型", weight: "20 磅以下", weightKg: "9 公斤以下" },
+      medium: { label: "中型", weight: "20 – 50 磅", weightKg: "9 – 23 公斤" },
+      large: { label: "大型", weight: "50 – 100 磅", weightKg: "23 – 45 公斤" },
+      giant: { label: "巨型", weight: "100 磅以上", weightKg: "45 公斤以上" },
     },
     levels: {
       low: { label: "低消费", desc: "乡村 / 小城镇" },
@@ -417,7 +452,11 @@ const zh: Dict = {
       customizeTitle: "自定义",
       customizeDesc: "输入您狗狗的真实数据以获得更精确的估算。",
       weightLabel: "狗狗体重（磅）",
+      weightLabelLb: "狗狗体重（磅）",
+      weightLabelKg: "狗狗体重（公斤）",
       weightUnit: "磅",
+      weightUnitLb: "磅",
+      weightUnitKg: "公斤",
       defaultForSize: "体型默认值",
       resetTo: "重置为默认值",
       activityLabel: "活动水平",
@@ -435,9 +474,25 @@ const zh: Dict = {
       energyNote:
         "干粮平均能量密度假设为 {kcal} kcal/kg。实际密度因品牌而异（通常 3,200 – 4,000 kcal/kg）。",
     },
+    costDetailBack: "返回计算器",
+    costDetailHint: "点击扇形查看详情",
+    simpleDetailDesc: "根据狗狗体型估算。可按需自定义金额。",
+    customAmount: "自定义金额",
+    perMoShort: "/月",
+    breed: {
+      title: "您想养什么品种的狗？",
+      subtitle: "选择犬种可根据真实体重数据获得更精确的费用估算。",
+      searchPlaceholder: "搜索犬种...",
+      skip: "暂时跳过",
+      skipDesc: "没有找到我的犬种 / 手动选择体型",
+      changeBreed: "更换犬种",
+      noResults: "没有找到匹配的犬种",
+      lbs: "磅",
+      or: "或",
+    },
   },
   method: {
-    title: "计算方法与假设",
+    title: "支持",
     desc: "PetPat 的估算基于美国宠物食品、兽医服务、美容和用品的公开市场价格数据。以下是我们的计算方式。",
     costCategoriesTitle: "费用分类",
     categories: [
@@ -516,6 +571,19 @@ const zh: Dict = {
       "本工具仅供教育和规划参考，不应替代专业的财务或兽医建议。",
     ],
     lastUpdated: "最后更新：2026年2月。费用数据会定期审核和调整。",
+    feedbackTitle: "发送反馈",
+    feedbackDesc: "有问题或建议？我们很乐意听取您的意见。",
+    feedbackName: "您的姓名",
+    feedbackEmail: "您的邮箱",
+    feedbackSummary: "简短描述您的反馈",
+    feedbackSummaryPlaceholder: "用一句话概括...",
+    feedbackSummaryLimit: "限英文字符100或中文字符30",
+    feedbackBody: "详细内容",
+    feedbackBodyPlaceholder: "您的反馈、问题或建议...",
+    feedbackSend: "发送",
+    feedbackSending: "发送中...",
+    feedbackSuccess: "感谢！您的反馈已发送成功。",
+    feedbackError: "发送失败，请稍后重试。",
   },
 };
 

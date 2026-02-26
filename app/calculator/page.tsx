@@ -1,11 +1,15 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useT } from "@/app/i18n/context";
+import { useT, useLanguage } from "@/app/i18n/context";
+import { useWeightUnit } from "@/app/weight-unit-context";
+import { breedToSize, breedAvgWeight, type Breed, type DogSize } from "./breeds";
+import BreedSelect from "./breed-select";
+import { PieChart } from "./pie-chart";
+import { CostDetailView } from "./cost-detail-view";
 
 /* ───────── types ───────── */
 
-type DogSize = "small" | "medium" | "large" | "giant";
 type CostLevel = "low" | "average" | "high" | "veryHigh";
 type Acquisition = "adopt" | "buy";
 
@@ -136,20 +140,26 @@ const fmt = (n: number) => n.toLocaleString("en-US");
 const fd = (n: number, d = 2) => n.toFixed(d);
 const adj = (base: number, mult: number) => Math.round(base * mult);
 
-const BAR_COLORS: Record<string, string> = {
-  Food: "bg-emerald-500",
-  Treats: "bg-lime-500",
-  "Preventive Meds": "bg-blue-500",
-  Grooming: "bg-purple-500",
-  "Toys & Supplies": "bg-amber-500",
-  "Waste Bags": "bg-gray-400",
-  Insurance: "bg-cyan-500",
+const LEGEND_COLORS: Record<string, string> = {
+  Food: "#0d9488",
+  Treats: "#14b8a6",
+  "Preventive Meds": "#06b6d4",
+  Grooming: "#0ea5e9",
+  "Toys & Supplies": "#6366f1",
+  "Waste Bags": "#64748b",
+  Insurance: "#8b5cf6",
 };
 
 /* ═══════════════════ Calculator ═══════════════════ */
 
 export default function Calculator() {
   const t = useT();
+  const { lang } = useLanguage();
+  const { unit, display, parseToLbs, suffix } = useWeightUnit();
+
+  /* ── step & breed ── */
+  const [step, setStep] = useState<"breed" | "calc">("breed");
+  const [selectedBreed, setSelectedBreed] = useState<Breed | null>(null);
 
   /* ── core state ── */
   const [size, setSize] = useState<DogSize>("medium");
@@ -158,24 +168,29 @@ export default function Calculator() {
   const [insurance, setInsurance] = useState(false);
   const [training, setTraining] = useState(false);
 
-  /* ── food detail state ── */
-  const [foodOpen, setFoodOpen] = useState(false);
-  const [customWeight, setCustomWeight] = useState("");
+  /* ── food detail state (stored in lbs for consistent calc across unit switch) ── */
+  const [customWeightLbs, setCustomWeightLbs] = useState<number | null>(null);
+  /* ── cost detail view (pie chart detail page) ── */
+  const [costDetailView, setCostDetailView] = useState<string | null>(null);
+  const [customOverrides, setCustomOverrides] = useState<Record<string, string>>(
+    {}
+  );
   const [activityKey, setActivityKey] = useState("neutered");
   const [foodTierKey, setFoodTierKey] = useState("midRange");
   const [customFoodPrice, setCustomFoodPrice] = useState("");
 
   const handleSizeChange = (s: DogSize) => {
     setSize(s);
-    setCustomWeight("");
+    setCustomWeightLbs(null);
   };
 
   /* ── food computation ── */
   const defaultWeight =
     DOG_SIZE_KEYS.find((d) => d.key === size)!.defaultLbs;
-  const effectiveWeight = customWeight
-    ? Math.max(1, parseFloat(customWeight) || defaultWeight)
-    : defaultWeight;
+  const effectiveWeight =
+    customWeightLbs != null
+      ? Math.max(1, customWeightLbs)
+      : defaultWeight;
   const activityFactor = ACTIVITY_FACTORS[activityKey] ?? 1.6;
   const tierPrice = FOOD_TIER_PRICES[foodTierKey] ?? 2.5;
   const effectiveFoodPrice = customFoodPrice
@@ -246,21 +261,9 @@ export default function Calculator() {
     const insuranceMo = insurance
       ? adj(COSTS.optional.insurance[size], m)
       : 0;
-    const totalMonthly =
-      food +
-      treats +
-      preventive +
-      grooming +
-      toysSupplies +
-      wasteBags +
-      insuranceMo;
 
-    const monthlyItems: {
-      label: string;
-      value: number;
-      expandable?: boolean;
-    }[] = [
-      { label: "Food", value: food, expandable: true },
+    const baseItems: { label: string; value: number }[] = [
+      { label: "Food", value: food },
       { label: "Treats", value: treats },
       { label: "Preventive Meds", value: preventive },
       { label: "Grooming", value: grooming },
@@ -268,6 +271,20 @@ export default function Calculator() {
       { label: "Waste Bags", value: wasteBags },
       ...(insurance ? [{ label: "Insurance", value: insuranceMo }] : []),
     ];
+
+    const applyOverride = (label: string, base: number) => {
+      const v = customOverrides[label];
+      if (v === undefined || v === "") return base;
+      const n = parseFloat(v);
+      return isNaN(n) ? base : Math.round(n);
+    };
+
+    const monthlyItems = baseItems.map((item) => ({
+      ...item,
+      value: applyOverride(item.label, item.value),
+    }));
+
+    const totalMonthly = monthlyItems.reduce((s, i) => s + i.value, 0);
 
     const vetVisit = adj(COSTS.annual.vetVisit, m);
     const vaccines = adj(COSTS.annual.vaccines, m);
@@ -313,20 +330,144 @@ export default function Calculator() {
         year15: firstYear + annualTotal * 14,
       },
     };
-  }, [size, cityMult, acquisition, insurance, training, foodCalc.monthlyCost]);
+  }, [
+    size,
+    cityMult,
+    acquisition,
+    insurance,
+    training,
+    foodCalc.monthlyCost,
+    customOverrides,
+  ]);
 
-  const maxMonthly = Math.max(...costs.monthly.items.map((i) => i.value));
+  /* ── breed handlers ── */
+  const handleBreedSelect = (breed: Breed) => {
+    setSelectedBreed(breed);
+    setSize(breedToSize(breed));
+    setCustomWeightLbs(breedAvgWeight(breed));
+    setStep("calc");
+  };
+
+  const handleSkip = () => {
+    setSelectedBreed(null);
+    setStep("calc");
+  };
 
   /* ════════ render ════════ */
+
+  if (step === "breed") {
+    return <BreedSelect onSelect={handleBreedSelect} onSkip={handleSkip} />;
+  }
+
+  /* Cost detail view (pie chart detail page) */
+  const selectedDetail =
+    costDetailView && costs.monthly.items.some((i) => i.label === costDetailView)
+      ? costDetailView
+      : null;
+
+  const detailContent =
+    selectedDetail === "Food" ? (
+      <FoodDetail
+        t={t}
+        calc={foodCalc}
+        defaultWeight={defaultWeight}
+        customWeightLbs={customWeightLbs}
+        onWeightChange={(val) => {
+          if (val.trim() === "") setCustomWeightLbs(null);
+          else {
+            const lbs = parseToLbs(val);
+            if (lbs > 0) setCustomWeightLbs(lbs);
+          }
+        }}
+        activityKey={activityKey}
+        onActivityChange={setActivityKey}
+        foodTierKey={foodTierKey}
+        onFoodTierChange={handleFoodTier}
+        customFoodPrice={customFoodPrice}
+        onPriceChange={setCustomFoodPrice}
+        cityMult={cityMult}
+        adjustedCost={Math.round(foodCalc.monthlyCost * cityMult)}
+        weightUnit={unit}
+        displayWeight={display}
+        weightSuffix={suffix}
+      />
+    ) : selectedDetail ? (
+      <div className="rounded-xl border border-border/60 bg-surface/60 p-6">
+        <p className="text-base text-muted">{t.calc.simpleDetailDesc}</p>
+        <div className="mt-4">
+          <label className="block text-sm font-medium text-muted">
+            {t.calc.customAmount}
+          </label>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="text-sm text-muted">$</span>
+            <input
+              type="number"
+              placeholder={String(
+                costs.monthly.items.find((i) => i.label === selectedDetail)
+                  ?.value ?? 0
+              )}
+              value={customOverrides[selectedDetail] ?? ""}
+              onChange={(e) =>
+                setCustomOverrides((o) => ({
+                  ...o,
+                  [selectedDetail]: e.target.value,
+                }))
+              }
+              className="w-24 rounded-lg border border-border bg-surface px-3 py-2 text-sm tabular-nums outline-none focus:border-primary"
+            />
+            <span className="text-xs text-muted">{t.calc.perMoShort}</span>
+          </div>
+        </div>
+      </div>
+    ) : null;
+
+  if (selectedDetail) {
+    return (
+      <CostDetailView
+        items={costs.monthly.items}
+        total={costs.monthly.total}
+        selected={selectedDetail}
+        onSelect={setCostDetailView}
+        onClose={() => setCostDetailView(null)}
+        onSwitch={setCostDetailView}
+        L={L}
+        t={t}
+        detailContent={detailContent}
+      />
+    );
+  }
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:py-14">
       {/* Header */}
       <header className="mb-12 text-center">
+        <button
+          onClick={() => setStep("breed")}
+          className="mb-4 inline-flex items-center gap-1 text-sm text-primary hover:underline"
+        >
+          ← {t.calc.breed.changeBreed}
+        </button>
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
           {t.calc.title}
         </h1>
         <p className="mx-auto mt-3 max-w-xl text-muted">{t.calc.subtitle}</p>
+        {selectedBreed && (
+          <div className="mx-auto mt-4 inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-1.5 text-sm font-medium text-primary">
+            🐕{" "}
+            {lang === "en" ? selectedBreed.nameEn : selectedBreed.nameZh}
+            <span className="text-primary/40">·</span>
+            <span className="tabular-nums">
+              {display(selectedBreed.weightMin).toFixed(
+                suffix === "kg" ? 1 : 0
+              )}
+              –
+              {display(selectedBreed.weightMax).toFixed(
+                suffix === "kg" ? 1 : 0
+              )}{" "}
+              {suffix}
+            </span>
+          </div>
+        )}
       </header>
 
       <div className="lg:grid lg:grid-cols-[380px_1fr] lg:gap-10">
@@ -352,7 +493,9 @@ export default function Calculator() {
                   >
                     <span className="text-2xl">{d.icon}</span>
                     <span className="text-sm font-semibold">{s.label}</span>
-                    <span className="text-[11px] text-muted">{s.weight}</span>
+                    <span className="text-[11px] text-muted">
+                      {unit === "lb" ? s.weight : s.weightKg}
+                    </span>
                   </button>
                 );
               })}
@@ -451,94 +594,47 @@ export default function Calculator() {
             </div>
           </div>
 
-          {/* Monthly Breakdown */}
+          {/* Monthly Breakdown — Pie chart */}
           <SectionCard
             title={t.calc.monthlyTitle}
             total={costs.monthly.total}
             suffix={t.calc.perMo}
           >
-            <div className="space-y-1">
-              {costs.monthly.items.map((item) => {
-                const isFood = item.label === "Food";
-                return (
-                  <div key={item.label}>
-                    {isFood ? (
-                      <button
-                        onClick={() => setFoodOpen((o) => !o)}
-                        className="group -mx-2 flex w-[calc(100%+16px)] items-center gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-foreground/[.03]"
-                      >
-                        <span className="w-32 shrink-0 text-left text-sm text-muted transition-colors group-hover:text-foreground">
-                          {L[item.label]}
-                          <span className="ml-1 inline-block text-[10px] text-primary/60">
-                            {t.calc.details}
-                          </span>
-                        </span>
-                        <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-foreground/[.06]">
-                          <div
-                            className={`cost-bar h-full rounded-full ${BAR_COLORS.Food}`}
-                            style={{
-                              width: `${(item.value / maxMonthly) * 100}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="w-14 text-right text-sm font-semibold tabular-nums">
-                          ${fmt(item.value)}
-                        </span>
-                        <Chevron open={foodOpen} />
-                      </button>
-                    ) : (
-                      <div className="flex items-center gap-3 py-2">
-                        <span className="w-32 shrink-0 text-sm text-muted">
-                          {L[item.label] ?? item.label}
-                        </span>
-                        <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-foreground/[.06]">
-                          <div
-                            className={`cost-bar h-full rounded-full ${BAR_COLORS[item.label] ?? "bg-gray-400"}`}
-                            style={{
-                              width: `${(item.value / maxMonthly) * 100}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="w-14 text-right text-sm font-semibold tabular-nums">
-                          ${fmt(item.value)}
-                        </span>
-                        <span className="w-4 shrink-0" />
-                      </div>
-                    )}
-
-                    {isFood && (
-                      <div
-                        className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${
-                          foodOpen
-                            ? "grid-rows-[1fr]"
-                            : "grid-rows-[0fr]"
-                        }`}
-                      >
-                        <div className="overflow-hidden">
-                          <FoodDetail
-                            t={t}
-                            calc={foodCalc}
-                            defaultWeight={defaultWeight}
-                            customWeight={customWeight}
-                            onWeightChange={setCustomWeight}
-                            activityKey={activityKey}
-                            onActivityChange={setActivityKey}
-                            foodTierKey={foodTierKey}
-                            onFoodTierChange={handleFoodTier}
-                            customFoodPrice={customFoodPrice}
-                            onPriceChange={setCustomFoodPrice}
-                            cityMult={cityMult}
-                            adjustedCost={Math.round(
-                              foodCalc.monthlyCost * cityMult,
-                            )}
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+            <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+              <PieChart
+                items={costs.monthly.items}
+                total={costs.monthly.total}
+                selected={null}
+                onSelect={(label) => setCostDetailView(label)}
+                size={240}
+                showLabels
+              />
+              <div className="flex flex-wrap gap-2 sm:flex-col">
+                {costs.monthly.items.map((item) => (
+                  <button
+                    key={item.label}
+                    onClick={() => setCostDetailView(item.label)}
+                    className="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-foreground/[.04]"
+                  >
+                    <span
+                      className="h-3 w-3 shrink-0 rounded-full"
+                      style={{
+                        backgroundColor: LEGEND_COLORS[item.label] ?? "#9ca3af",
+                      }}
+                    />
+                    <span className="text-sm text-muted">
+                      {L[item.label] ?? item.label}
+                    </span>
+                    <span className="text-sm font-semibold tabular-nums">
+                      ${fmt(item.value)}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
+            <p className="mt-4 text-center text-xs text-muted">
+              {t.calc.costDetailHint}
+            </p>
           </SectionCard>
 
           {/* Annual Fixed Costs */}
@@ -632,7 +728,7 @@ function FoodDetail({
   t,
   calc,
   defaultWeight,
-  customWeight,
+  customWeightLbs,
   onWeightChange,
   activityKey,
   onActivityChange,
@@ -642,11 +738,14 @@ function FoodDetail({
   onPriceChange,
   cityMult,
   adjustedCost,
+  weightUnit,
+  displayWeight,
+  weightSuffix,
 }: {
   t: ReturnType<typeof useT>;
   calc: FoodCalc;
   defaultWeight: number;
-  customWeight: string;
+  customWeightLbs: number | null;
   onWeightChange: (v: string) => void;
   activityKey: string;
   onActivityChange: (v: string) => void;
@@ -656,6 +755,9 @@ function FoodDetail({
   onPriceChange: (v: string) => void;
   cityMult: number;
   adjustedCost: number;
+  weightUnit: "lb" | "kg";
+  displayWeight: (lbs: number) => number;
+  weightSuffix: string;
 }) {
   const ft = t.calc.foodDetail;
   const ta = t.calc.activity;
@@ -664,15 +766,23 @@ function FoodDetail({
   return (
     <div className="mb-3 mt-2 rounded-xl border border-border/60 bg-background p-5">
       {/* ── Calculation Steps ── */}
-      <h4 className="text-sm font-semibold">{ft.howTitle}</h4>
-      <p className="mt-1 text-xs leading-relaxed text-muted">{ft.howDesc}</p>
+      <h4 className="text-base font-semibold">{ft.howTitle}</h4>
+      <p className="mt-1 text-sm leading-relaxed text-muted">{ft.howDesc}</p>
 
       <div className="mt-4 space-y-2.5">
         <Step
           n={1}
           label={ft.step1}
-          formula={`${fd(calc.weightLbs, 0)} lbs × 0.4536`}
-          result={`${fd(calc.weightKg, 2)} kg`}
+          formula={
+            weightUnit === "lb"
+              ? `${fd(calc.weightLbs, 0)} lbs × 0.4536`
+              : `${fd(calc.weightKg, 2)} kg`
+          }
+          result={
+            weightUnit === "lb"
+              ? `${fd(calc.weightKg, 2)} kg`
+              : `${fd(calc.weightKg, 2)} kg`
+          }
         />
         <Step
           n={2}
@@ -690,18 +800,34 @@ function FoodDetail({
           n={4}
           label={ft.step4}
           formula={`${fd(calc.mer, 0)} ÷ ${fmt(FOOD_KCAL_PER_KG)} kcal/kg`}
-          result={`${fd(calc.dailyKg, 3)} kg (${fd(calc.dailyLbs, 2)} lbs)`}
+          result={
+            weightUnit === "lb"
+              ? `${fd(calc.dailyKg, 3)} kg (${fd(calc.dailyLbs, 2)} lbs)`
+              : `${fd(calc.dailyKg, 3)} kg (${fd(calc.dailyLbs, 2)} lbs)`
+          }
         />
         <Step
           n={5}
           label={ft.step5}
-          formula={`${fd(calc.dailyLbs, 2)} lbs × ${DAYS_PER_MONTH} days`}
-          result={`${fd(calc.monthlyLbs, 1)} lbs / mo`}
+          formula={
+            weightUnit === "lb"
+              ? `${fd(calc.dailyLbs, 2)} lbs × ${DAYS_PER_MONTH} days`
+              : `${fd(calc.dailyKg, 3)} kg × ${DAYS_PER_MONTH} days`
+          }
+          result={
+            weightUnit === "lb"
+              ? `${fd(calc.monthlyLbs, 1)} lbs / mo`
+              : `${fd(calc.monthlyLbs * LBS_TO_KG, 1)} kg / mo`
+          }
         />
         <Step
           n={6}
           label={ft.step6}
-          formula={`${fd(calc.monthlyLbs, 1)} × $${fd(calc.pricePerLb, 2)}/lb`}
+          formula={
+            weightUnit === "lb"
+              ? `${fd(calc.monthlyLbs, 1)} × $${fd(calc.pricePerLb, 2)}/lb`
+              : `${fd(calc.monthlyLbs * LBS_TO_KG, 1)} kg × $${fd(calc.pricePerLb / LBS_TO_KG, 2)}/kg`
+          }
           result={`$${fd(calc.monthlyCost, 2)}`}
         />
         {cityMult !== 1.0 && (
@@ -717,43 +843,51 @@ function FoodDetail({
 
       {/* ── Customize ── */}
       <div className="mt-5 border-t border-border/40 pt-5">
-        <h4 className="text-sm font-semibold">{ft.customizeTitle}</h4>
-        <p className="mt-0.5 text-[11px] text-muted">{ft.customizeDesc}</p>
+        <h4 className="text-base font-semibold">{ft.customizeTitle}</h4>
+        <p className="mt-0.5 text-sm text-muted">{ft.customizeDesc}</p>
 
         {/* Weight */}
         <label className="mt-4 block">
-          <span className="text-xs font-medium text-muted">
-            {ft.weightLabel}
+          <span className="text-sm font-medium text-muted">
+            {weightUnit === "lb" ? ft.weightLabelLb : ft.weightLabelKg}
           </span>
           <div className="relative mt-1">
             <input
               type="number"
               inputMode="decimal"
-              min={1}
-              max={300}
-              step={1}
-              placeholder={`${defaultWeight} (${ft.defaultForSize})`}
-              value={customWeight}
+              min={weightUnit === "lb" ? 1 : 0.5}
+              max={weightUnit === "lb" ? 300 : 140}
+              step={weightUnit === "lb" ? 1 : 0.5}
+              placeholder={`${displayWeight(defaultWeight).toFixed(weightSuffix === "kg" ? 1 : 0)} (${ft.defaultForSize})`}
+              value={
+                customWeightLbs != null
+                  ? displayWeight(customWeightLbs).toFixed(
+                      weightSuffix === "kg" ? 1 : 0
+                    )
+                  : ""
+              }
               onChange={(e) => onWeightChange(e.target.value)}
               className="w-full rounded-lg border border-border bg-surface px-3 py-2 pr-12 text-sm tabular-nums outline-none transition-colors placeholder:text-muted/50 focus:border-primary"
             />
-            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted">
-              {ft.weightUnit}
+            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted">
+              {weightUnit === "lb" ? ft.weightUnitLb : ft.weightUnitKg}
             </span>
           </div>
-          {customWeight && (
+          {customWeightLbs != null && (
             <button
               onClick={() => onWeightChange("")}
-              className="mt-1 text-[11px] text-primary hover:underline"
+              className="mt-1 text-sm text-primary hover:underline"
             >
-              {ft.resetTo} ({defaultWeight} lbs)
+              {ft.resetTo} (
+              {displayWeight(defaultWeight).toFixed(weightSuffix === "kg" ? 1 : 0)}{" "}
+              {weightSuffix})
             </button>
           )}
         </label>
 
         {/* Activity Level */}
         <div className="mt-4">
-          <span className="text-xs font-medium text-muted">
+          <span className="text-sm font-medium text-muted">
             {ft.activityLabel}
           </span>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -764,7 +898,7 @@ function FoodDetail({
                   key={k}
                   onClick={() => onActivityChange(k)}
                   title={a.desc}
-                  className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-all ${
+                  className={`rounded-lg px-2.5 py-1.5 text-sm font-medium transition-all ${
                     activityKey === k
                       ? "bg-primary text-white shadow-sm"
                       : "bg-foreground/[.06] text-muted hover:bg-foreground/[.10]"
@@ -775,14 +909,14 @@ function FoodDetail({
               );
             })}
           </div>
-          <p className="mt-1 text-[10px] text-muted/60">
+          <p className="mt-1 text-xs text-muted/60">
             {ta[activityKey as keyof typeof ta]?.desc} · {ft.factorNote}
           </p>
         </div>
 
         {/* Food Quality */}
         <div className="mt-4">
-          <span className="text-xs font-medium text-muted">
+          <span className="text-sm font-medium text-muted">
             {ft.foodQualityLabel}
           </span>
           <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
@@ -799,20 +933,22 @@ function FoodDetail({
                       : "bg-foreground/[.06] text-muted hover:bg-foreground/[.10]"
                   }`}
                 >
-                  <span className="block text-[11px] font-medium">
+                  <span className="block text-sm font-medium">
                     {tier.label}
                   </span>
-                  <span className="block text-[10px] opacity-70">
-                    ${FOOD_TIER_PRICES[k].toFixed(2)}/lb
+                  <span className="block text-xs opacity-70">
+                    {weightUnit === "lb"
+                      ? `$${FOOD_TIER_PRICES[k].toFixed(2)}/lb`
+                      : `$${(FOOD_TIER_PRICES[k] / LBS_TO_KG).toFixed(2)}/kg`}
                   </span>
                 </button>
               );
             })}
           </div>
           <div className="mt-2 flex items-center gap-2">
-            <span className="text-[11px] text-muted">{ft.orCustom}</span>
+            <span className="text-sm text-muted">{ft.orCustom}</span>
             <div className="flex items-center gap-1">
-              <span className="text-xs text-muted">$</span>
+              <span className="text-sm text-muted">$</span>
               <input
                 type="number"
                 inputMode="decimal"
@@ -825,7 +961,7 @@ function FoodDetail({
                 onChange={(e) => onPriceChange(e.target.value)}
                 className="w-20 rounded-lg border border-border bg-surface px-2 py-1 text-xs tabular-nums outline-none transition-colors placeholder:text-muted/50 focus:border-primary"
               />
-              <span className="text-[11px] text-muted">{ft.perLb}</span>
+              <span className="text-sm text-muted">{ft.perLb}</span>
             </div>
           </div>
         </div>
@@ -833,10 +969,10 @@ function FoodDetail({
 
       {/* ── Sources ── */}
       <div className="mt-5 border-t border-border/40 pt-4">
-        <p className="text-[11px] font-semibold text-muted">
+        <p className="text-sm font-semibold text-muted">
           {ft.sourcesTitle}
         </p>
-        <ul className="mt-1.5 space-y-1 text-[11px] leading-relaxed text-muted/70">
+        <ul className="mt-1.5 space-y-1 text-sm leading-relaxed text-muted/70">
           <li className="flex items-start gap-1.5">
             <span className="mt-px shrink-0">📄</span>
             <span>
@@ -870,7 +1006,7 @@ function FoodDetail({
             <span>{ft.retailNote}</span>
           </li>
         </ul>
-        <p className="mt-2 text-[10px] text-muted/50">
+        <p className="mt-2 text-xs text-muted/50">
           {ft.energyNote.replace("{kcal}", fmt(FOOD_KCAL_PER_KG))}
         </p>
       </div>
@@ -895,16 +1031,16 @@ function Step({
 }) {
   return (
     <div
-      className={`flex items-start gap-3 rounded-lg px-2 py-1.5 ${
+      className={`flex items-start gap-3 rounded-lg px-2.5 py-2 ${
         highlight ? "bg-primary/5" : ""
       }`}
     >
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
         {n}
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-[11px] font-medium text-muted">{label}</p>
-        <p className="mt-0.5 font-mono text-xs leading-relaxed text-foreground/70">
+        <p className="text-sm font-medium text-muted">{label}</p>
+        <p className="mt-0.5 font-mono text-sm leading-relaxed text-foreground/70">
           {formula} ={" "}
           <span className="font-semibold text-foreground">{result}</span>
         </p>
@@ -975,20 +1111,3 @@ function Toggle({
   );
 }
 
-function Chevron({ open }: { open: boolean }) {
-  return (
-    <svg
-      className={`h-4 w-4 shrink-0 text-muted transition-transform duration-200 ${
-        open ? "rotate-180" : ""
-      }`}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M6 9l6 6 6-6" />
-    </svg>
-  );
-}

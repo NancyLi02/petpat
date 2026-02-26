@@ -1,0 +1,168 @@
+breeds:
+  - name_en: Labrador Retriever
+    name_zh: 拉布拉多寻回犬
+    weight_lb:
+      min: 55
+      max: 80
+    size: large
+
+  - name_en: Golden Retriever
+    name_zh: 金毛寻回犬
+    weight_lb:
+      min: 55
+      max: 75
+    size: large
+
+  - name_en: German Shepherd
+    name_zh: 德国牧羊犬
+    weight_lb:
+      min: 50
+      max: 90
+    size: large
+
+  - name_en: French Bulldog
+    name_zh: 法国斗牛犬
+    weight_lb:
+      min: 16
+      max: 28
+    size: small
+
+  - name_en: English Bulldog
+    name_zh: 英国斗牛犬
+    weight_lb:
+      min: 40
+      max: 55
+    size: medium
+
+  - name_en: Poodle (Standard)
+    name_zh: 标准贵宾犬
+    weight_lb:
+      min: 45
+      max: 70
+    size: medium
+
+  - name_en: Poodle (Miniature)
+    name_zh: 迷你贵宾犬
+    weight_lb:
+      min: 10
+      max: 20
+    size: small
+
+  - name_en: Beagle
+    name_zh: 比格犬
+    weight_lb:
+      min: 20
+      max: 30
+    size: small
+
+  - name_en: Rottweiler
+    name_zh: 罗威纳犬
+    weight_lb:
+      min: 80
+      max: 135
+    size: large
+
+  - name_en: Yorkshire Terrier
+    name_zh: 约克夏梗
+    weight_lb:
+      min: 4
+      max: 7
+    size: small
+
+  - name_en: Boxer
+    name_zh: 拳师犬
+    weight_lb:
+      min: 55
+      max: 80
+    size: large
+
+  - name_en: Dachshund
+    name_zh: 腊肠犬
+    weight_lb:
+      min: 11
+      max: 32
+    size: small
+
+  - name_en: Siberian Husky
+    name_zh: 西伯利亚哈士奇
+    weight_lb:
+      min: 35
+      max: 60
+    size: medium
+
+  - name_en: Great Dane
+    name_zh: 大丹犬
+    weight_lb:
+      min: 110
+      max: 175
+    size: large
+
+  - name_en: Doberman Pinscher
+    name_zh: 杜宾犬
+    weight_lb:
+      min: 60
+      max: 100
+    size: large
+
+  - name_en: Shih Tzu
+    name_zh: 西施犬
+    weight_lb:
+      min: 9
+      max: 16
+    size: small
+
+  - name_en: Chihuahua
+    name_zh: 吉娃娃
+    weight_lb:
+      min: 3
+      max: 6
+    size: small
+
+  - name_en: Australian Shepherd
+    name_zh: 澳大利亚牧羊犬
+    weight_lb:
+      min: 40
+      max: 65
+    size: medium
+
+  - name_en: Border Collie
+    name_zh: 边境牧羊犬
+    weight_lb:
+      min: 30
+      max: 55
+    size: medium
+
+  - name_en: Cocker Spaniel
+    name_zh: 可卡犬
+    weight_lb:
+      min: 20
+      max: 30
+    size: medium
+
+  - name_en: Alaskan Malamute
+    name_zh: 阿拉斯加雪橇犬
+    weight_lb:
+      min: 75
+      max: 100
+    size: large
+
+  - name_en: Bernese Mountain Dog
+    name_zh: 伯恩山犬
+    weight_lb:
+      min: 70
+      max: 115
+    size: large
+
+  - name_en: Bichon Frise
+    name_zh: 比熊犬
+    weight_lb:
+      min: 12
+      max: 18
+    size: small
+
+  - name_en: Pug
+    name_zh: 巴哥犬
+    weight_lb:
+      min: 14
+      max: 18
+    size: small

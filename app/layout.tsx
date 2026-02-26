@@ -4,6 +4,8 @@ import "./globals.css";
 import Footer from "./components/Footer";
 import Navbar from "./components/Navbar";
 import { LanguageProvider } from "./i18n/context";
+import { FullScreenProvider } from "./fullscreen-context";
+import { WeightUnitProvider } from "./weight-unit-context";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -38,9 +40,13 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <LanguageProvider>
-          <Navbar />
-          <div className="min-h-screen">{children}</div>
-          <Footer />
+          <WeightUnitProvider>
+            <FullScreenProvider>
+              <Navbar />
+              <div className="min-h-screen">{children}</div>
+              <Footer />
+            </FullScreenProvider>
+          </WeightUnitProvider>
         </LanguageProvider>
       </body>
     </html>
