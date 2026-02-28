@@ -90,6 +90,94 @@ const COSTS = {
   },
 };
 
+/* ───────── insurance premium model (NAPHIA 2024 base, multiplicative factors) ───────── */
+const INSURANCE_BASE_MO = 62.44; // USD/mo, dog A&I (Accident + Illness)
+
+const AGE_FACTORS: { maxAge: number; factor: number }[] = [
+  { maxAge: 1, factor: 0.8 },
+  { maxAge: 5, factor: 1.0 },
+  { maxAge: 8, factor: 1.4 },
+  { maxAge: 11, factor: 1.9 },
+  { maxAge: 999, factor: 2.5 },
+];
+
+const BREED_FACTORS: Record<DogSize, number> = {
+  small: 0.95,
+  medium: 1.0,
+  large: 1.1,
+  giant: 1.2,
+};
+
+const HIGH_RISK_BREED_FACTOR = 1.25; // brachycephalic, IVDD-prone, etc.
+
+const REGION_FACTORS: Record<CostLevel, number> = {
+  low: 0.9,
+  average: 1.0,
+  high: 1.2,
+  veryHigh: 1.3,
+};
+
+const REIMBURSEMENT_OPTIONS = [
+  { key: "70", pct: 70, factor: 0.9 },
+  { key: "80", pct: 80, factor: 1.0 },
+  { key: "90", pct: 90, factor: 1.15 },
+] as const;
+
+const DEDUCTIBLE_OPTIONS = [
+  { key: "750", val: 750, factor: 0.85 },
+  { key: "500", val: 500, factor: 1.0 },
+  { key: "250", val: 250, factor: 1.15 },
+  { key: "100", val: 100, factor: 1.3 },
+] as const;
+
+const ANNUAL_LIMIT_OPTIONS = [
+  { key: "5000", val: 5000, factor: 1.0 },
+  { key: "10000", val: 10000, factor: 1.1 },
+  { key: "unlimited", val: 0, factor: 1.35 },
+] as const;
+
+const HIGH_RISK_BREEDS = new Set([
+  "French Bulldog",
+  "English Bulldog",
+  "Pug",
+  "Dachshund",
+  "Cavalier King Charles Spaniel",
+  "Boxer",
+  "Shih Tzu",
+  "Pekingese",
+  "Boston Terrier",
+]);
+
+function getAgeFactor(ageYears: number): number {
+  for (const { maxAge, factor } of AGE_FACTORS) {
+    if (ageYears <= maxAge) return factor;
+  }
+  return AGE_FACTORS[AGE_FACTORS.length - 1].factor;
+}
+
+function calcInsurancePremium(
+  ageYears: number,
+  size: DogSize,
+  costLevel: CostLevel,
+  isHighRiskBreed: boolean,
+  reimbFactor: number,
+  deductFactor: number,
+  limitFactor: number,
+): { estimate: number; low: number; high: number } {
+  const ageF = getAgeFactor(ageYears);
+  const breedF = BREED_FACTORS[size] * (isHighRiskBreed ? HIGH_RISK_BREED_FACTOR : 1);
+  const regionF = REGION_FACTORS[costLevel];
+  const planF = reimbFactor * deductFactor * limitFactor;
+  const estimate =
+    INSURANCE_BASE_MO * ageF * breedF * regionF * planF;
+  const pctRange = 0.15;
+  return {
+    estimate: Math.round(estimate),
+    low: Math.round(estimate * (1 - pctRange)),
+    high: Math.round(estimate * (1 + pctRange)),
+  };
+}
+
 /* ───────── food metabolic model ───────── */
 
 interface FoodCalc {
@@ -142,12 +230,11 @@ const adj = (base: number, mult: number) => Math.round(base * mult);
 
 const LEGEND_COLORS: Record<string, string> = {
   Food: "#0d9488",
-  Treats: "#14b8a6",
   "Preventive Meds": "#06b6d4",
-  Grooming: "#0ea5e9",
-  "Toys & Supplies": "#6366f1",
-  "Waste Bags": "#64748b",
-  Insurance: "#8b5cf6",
+  Treats: "#0ea5e9",
+  Grooming: "#6366f1",
+  "Toys & Supplies": "#6d28d9",
+  Insurance: "#64748b",
 };
 
 /* ═══════════════════ Calculator ═══════════════════ */
@@ -167,6 +254,9 @@ export default function Calculator() {
   const [acquisition, setAcquisition] = useState<Acquisition>("adopt");
   const [insurance, setInsurance] = useState(false);
   const [training, setTraining] = useState(false);
+  const [useTreats, setUseTreats] = useState(true);
+  const [useGrooming, setUseGrooming] = useState(true);
+  const [useToysSupplies, setUseToysSupplies] = useState(true);
 
   /* ── food detail state (stored in lbs for consistent calc across unit switch) ── */
   const [customWeightLbs, setCustomWeightLbs] = useState<number | null>(null);
@@ -178,6 +268,15 @@ export default function Calculator() {
   const [activityKey, setActivityKey] = useState("neutered");
   const [foodTierKey, setFoodTierKey] = useState("midRange");
   const [customFoodPrice, setCustomFoodPrice] = useState("");
+
+  /* ── insurance detail state ── */
+  const [dogAgeYears, setDogAgeYears] = useState(4);
+  const [insuranceReimbursement, setInsuranceReimbursement] =
+    useState<"70" | "80" | "90">("80");
+  const [insuranceDeductible, setInsuranceDeductible] =
+    useState<"100" | "250" | "500" | "750">("500");
+  const [insuranceAnnualLimit, setInsuranceAnnualLimit] =
+    useState<"5000" | "10000" | "unlimited">("5000");
 
   const handleSizeChange = (s: DogSize) => {
     setSize(s);
@@ -232,6 +331,33 @@ export default function Calculator() {
   /* ── overall costs ── */
   const cityMult = CITY_MULT[costLevel];
 
+  const isHighRiskBreed = selectedBreed
+    ? HIGH_RISK_BREEDS.has(selectedBreed.nameEn)
+    : false;
+
+  const insurancePremium = useMemo(() => {
+    const reimb = REIMBURSEMENT_OPTIONS.find((o) => o.key === insuranceReimbursement);
+    const deduct = DEDUCTIBLE_OPTIONS.find((o) => o.key === insuranceDeductible);
+    const limit = ANNUAL_LIMIT_OPTIONS.find((o) => o.key === insuranceAnnualLimit);
+    return calcInsurancePremium(
+      dogAgeYears,
+      size,
+      costLevel,
+      isHighRiskBreed,
+      reimb?.factor ?? 1,
+      deduct?.factor ?? 1,
+      limit?.factor ?? 1,
+    );
+  }, [
+    dogAgeYears,
+    size,
+    costLevel,
+    isHighRiskBreed,
+    insuranceReimbursement,
+    insuranceDeductible,
+    insuranceAnnualLimit,
+  ]);
+
   const costs = useMemo(() => {
     const m = cityMult;
     const food = Math.round(foodCalc.monthlyCost * m);
@@ -258,18 +384,27 @@ export default function Calculator() {
     const grooming = adj(COSTS.monthly.grooming[size], m);
     const toysSupplies = adj(COSTS.monthly.toysSupplies, m);
     const wasteBags = adj(COSTS.monthly.wasteBags, m);
-    const insuranceMo = insurance
-      ? adj(COSTS.optional.insurance[size], m)
-      : 0;
-
+    const toysSuppliesWithWaste = toysSupplies + wasteBags;
+    const insuranceMo = insurance ? insurancePremium.estimate : 0;
+    const insuranceBase = insurancePremium.estimate;
     const baseItems: { label: string; value: number }[] = [
       { label: "Food", value: food },
-      { label: "Treats", value: treats },
       { label: "Preventive Meds", value: preventive },
-      { label: "Grooming", value: grooming },
-      { label: "Toys & Supplies", value: toysSupplies },
-      { label: "Waste Bags", value: wasteBags },
+      ...(useTreats ? [{ label: "Treats", value: treats }] : []),
+      ...(useGrooming ? [{ label: "Grooming", value: grooming }] : []),
+      ...(useToysSupplies
+        ? [{ label: "Toys & Supplies", value: toysSuppliesWithWaste }]
+        : []),
       ...(insurance ? [{ label: "Insurance", value: insuranceMo }] : []),
+    ];
+
+    const baseItemsAll: { label: string; value: number }[] = [
+      { label: "Food", value: food },
+      { label: "Preventive Meds", value: preventive },
+      { label: "Treats", value: treats },
+      { label: "Grooming", value: grooming },
+      { label: "Toys & Supplies", value: toysSuppliesWithWaste },
+      { label: "Insurance", value: insuranceBase },
     ];
 
     const applyOverride = (label: string, base: number) => {
@@ -284,7 +419,13 @@ export default function Calculator() {
       value: applyOverride(item.label, item.value),
     }));
 
+    const monthlyItemsAll = baseItemsAll.map((item) => ({
+      ...item,
+      value: applyOverride(item.label, item.value),
+    }));
+
     const totalMonthly = monthlyItems.reduce((s, i) => s + i.value, 0);
+    const totalMonthlyAll = monthlyItemsAll.reduce((s, i) => s + i.value, 0);
 
     const vetVisit = adj(COSTS.annual.vetVisit, m);
     const vaccines = adj(COSTS.annual.vaccines, m);
@@ -321,7 +462,12 @@ export default function Calculator() {
         ],
         total: totalInitial + trainingCost,
       },
-      monthly: { items: monthlyItems, total: totalMonthly },
+      monthly: {
+        items: monthlyItems,
+        total: totalMonthly,
+        itemsAll: monthlyItemsAll,
+        totalAll: totalMonthlyAll,
+      },
       annual: { items: annualItems, total: totalAnnualFixed },
       summary: { monthly: totalMonthly, annual: annualTotal, firstYear },
       lifetime: {
@@ -335,7 +481,11 @@ export default function Calculator() {
     cityMult,
     acquisition,
     insurance,
+    insurancePremium,
     training,
+    useTreats,
+    useGrooming,
+    useToysSupplies,
     foodCalc.monthlyCost,
     customOverrides,
   ]);
@@ -359,11 +509,33 @@ export default function Calculator() {
     return <BreedSelect onSelect={handleBreedSelect} onSkip={handleSkip} />;
   }
 
+  const OPTIONAL_LABELS = [
+    "Treats",
+    "Grooming",
+    "Toys & Supplies",
+    "Insurance",
+  ] as const;
+
   /* Cost detail view (pie chart detail page) */
   const selectedDetail =
-    costDetailView && costs.monthly.items.some((i) => i.label === costDetailView)
+    costDetailView &&
+    (costs.monthly.items.some((i) => i.label === costDetailView) ||
+      OPTIONAL_LABELS.includes(
+        costDetailView as (typeof OPTIONAL_LABELS)[number],
+      ))
       ? costDetailView
       : null;
+
+  const detailItems = selectedDetail
+    ? costs.monthly.items.some((i) => i.label === selectedDetail)
+      ? costs.monthly.items
+      : costs.monthly.itemsAll
+    : [];
+  const detailTotal =
+    selectedDetail &&
+    costs.monthly.items.some((i) => i.label === selectedDetail)
+      ? costs.monthly.total
+      : costs.monthly.totalAll;
 
   const detailContent =
     selectedDetail === "Food" ? (
@@ -385,11 +557,37 @@ export default function Calculator() {
         onFoodTierChange={handleFoodTier}
         customFoodPrice={customFoodPrice}
         onPriceChange={setCustomFoodPrice}
+        customAmount={customOverrides.Food ?? ""}
+        onCustomAmountChange={(v) =>
+          setCustomOverrides((o) => ({ ...o, Food: v }))
+        }
         cityMult={cityMult}
         adjustedCost={Math.round(foodCalc.monthlyCost * cityMult)}
         weightUnit={unit}
         displayWeight={display}
         weightSuffix={suffix}
+      />
+    ) : selectedDetail === "Insurance" ? (
+      <InsuranceDetail
+        t={t}
+        lang={lang}
+        premium={insurancePremium}
+        customAmount={customOverrides.Insurance ?? ""}
+        onCustomAmountChange={(v) =>
+          setCustomOverrides((o) => ({ ...o, Insurance: v }))
+        }
+        dogAgeYears={dogAgeYears}
+        onAgeChange={setDogAgeYears}
+        size={size}
+        costLevel={costLevel}
+        isHighRiskBreed={isHighRiskBreed}
+        selectedBreed={selectedBreed}
+        insuranceReimbursement={insuranceReimbursement}
+        onReimbursementChange={setInsuranceReimbursement}
+        insuranceDeductible={insuranceDeductible}
+        onDeductibleChange={setInsuranceDeductible}
+        insuranceAnnualLimit={insuranceAnnualLimit}
+        onAnnualLimitChange={setInsuranceAnnualLimit}
       />
     ) : selectedDetail ? (
       <div className="rounded-xl border border-border/60 bg-surface/60 p-6">
@@ -403,8 +601,7 @@ export default function Calculator() {
             <input
               type="number"
               placeholder={String(
-                costs.monthly.items.find((i) => i.label === selectedDetail)
-                  ?.value ?? 0
+                detailItems.find((i) => i.label === selectedDetail)?.value ?? 0
               )}
               value={customOverrides[selectedDetail] ?? ""}
               onChange={(e) =>
@@ -424,8 +621,8 @@ export default function Calculator() {
   if (selectedDetail) {
     return (
       <CostDetailView
-        items={costs.monthly.items}
-        total={costs.monthly.total}
+        items={detailItems}
+        total={detailTotal}
         selected={selectedDetail}
         onSelect={setCostDetailView}
         onClose={() => setCostDetailView(null)}
@@ -554,12 +751,6 @@ export default function Calculator() {
           {/* Toggles */}
           <div className="space-y-4">
             <Toggle
-              label={t.calc.insuranceLabel}
-              desc={t.calc.insuranceDesc}
-              checked={insurance}
-              onChange={setInsurance}
-            />
-            <Toggle
               label={t.calc.trainingLabel}
               desc={t.calc.trainingDesc}
               checked={training}
@@ -600,6 +791,37 @@ export default function Calculator() {
             total={costs.monthly.total}
             suffix={t.calc.perMo}
           >
+            {/* Optional items toggles */}
+            <div className="mb-4 grid gap-3 sm:grid-cols-2">
+              <Toggle
+                label={t.calc.treatsLabel}
+                desc={t.calc.treatsDesc}
+                checked={useTreats}
+                onChange={setUseTreats}
+                onLabelClick={() => setCostDetailView("Treats")}
+              />
+              <Toggle
+                label={t.calc.groomingLabel}
+                desc={t.calc.groomingDesc}
+                checked={useGrooming}
+                onChange={setUseGrooming}
+                onLabelClick={() => setCostDetailView("Grooming")}
+              />
+              <Toggle
+                label={t.calc.toysSuppliesLabel}
+                desc={t.calc.toysSuppliesDesc}
+                checked={useToysSupplies}
+                onChange={setUseToysSupplies}
+                onLabelClick={() => setCostDetailView("Toys & Supplies")}
+              />
+              <Toggle
+                label={t.calc.insuranceLabel}
+                desc={t.calc.insuranceDesc}
+                checked={insurance}
+                onChange={setInsurance}
+                onLabelClick={() => setCostDetailView("Insurance")}
+              />
+            </div>
             <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
               <PieChart
                 items={costs.monthly.items}
@@ -608,6 +830,8 @@ export default function Calculator() {
                 onSelect={(label) => setCostDetailView(label)}
                 size={240}
                 showLabels
+                showSliceLabels
+                labelMap={L}
               />
               <div className="flex flex-wrap gap-2 sm:flex-col">
                 {costs.monthly.items.map((item) => (
@@ -722,6 +946,279 @@ export default function Calculator() {
   );
 }
 
+/* ═══════════════════ Insurance Detail Panel ═══════════════════ */
+
+function InsuranceDetail({
+  t,
+  lang,
+  premium,
+  customAmount,
+  onCustomAmountChange,
+  dogAgeYears,
+  onAgeChange,
+  size,
+  costLevel,
+  isHighRiskBreed,
+  selectedBreed,
+  insuranceReimbursement,
+  onReimbursementChange,
+  insuranceDeductible,
+  onDeductibleChange,
+  insuranceAnnualLimit,
+  onAnnualLimitChange,
+}: {
+  t: ReturnType<typeof useT>;
+  lang: string;
+  premium: { estimate: number; low: number; high: number };
+  customAmount: string;
+  onCustomAmountChange: (v: string) => void;
+  dogAgeYears: number;
+  onAgeChange: (v: number) => void;
+  size: DogSize;
+  costLevel: CostLevel;
+  isHighRiskBreed: boolean;
+  selectedBreed: Breed | null;
+  insuranceReimbursement: "70" | "80" | "90";
+  onReimbursementChange: (v: "70" | "80" | "90") => void;
+  insuranceDeductible: "100" | "250" | "500" | "750";
+  onDeductibleChange: (v: "100" | "250" | "500" | "750") => void;
+  insuranceAnnualLimit: "5000" | "10000" | "unlimited";
+  onAnnualLimitChange: (v: "5000" | "10000" | "unlimited") => void;
+}) {
+  const ins = t.calc.insuranceDetail;
+  const sizeLabels = t.calc.sizes;
+  const levelLabels = t.calc.levels;
+
+  return (
+    <div className="mb-3 mt-2 rounded-xl border border-border/60 bg-background p-5">
+      <h4 className="text-base font-semibold">{ins.howTitle}</h4>
+      <p className="mt-1 text-sm leading-relaxed text-muted">{ins.howDesc}</p>
+
+      {/* Premium result — final amount used in budget */}
+      {(() => {
+        const hasCustom = customAmount && !isNaN(parseFloat(customAmount));
+        const finalAmount = hasCustom
+          ? Math.round(parseFloat(customAmount))
+          : premium.estimate;
+        return (
+          <div className="mt-4 rounded-xl border-2 border-primary/30 bg-primary/10 p-5">
+            <p className="text-xs font-semibold uppercase tracking-wider text-primary/80">
+              {ins.finalLabel}
+            </p>
+            <p className="mt-1 text-3xl font-bold tabular-nums text-primary">
+              ${fmt(finalAmount)}
+              <span className="ml-1 text-lg font-normal text-muted">/mo</span>
+            </p>
+            {ins.finalDesc && (
+              <p className="mt-1 text-sm text-muted">{ins.finalDesc}</p>
+            )}
+            {!hasCustom && (
+              <p className="mt-2 text-xs text-muted">
+                {ins.rangeLabel}: ${fmt(premium.low)} – ${fmt(premium.high)}/mo
+              </p>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Customize */}
+      <div className="mt-5 border-t border-border/40 pt-5">
+        <h4 className="text-base font-semibold">{t.calc.foodDetail.customizeTitle}</h4>
+
+        {/* Age */}
+        <label className="mt-4 block">
+          <span className="text-sm font-medium text-muted">{ins.ageLabel}</span>
+          {ins.ageHint && (
+            <p className="mt-0.5 text-xs text-muted/90">{ins.ageHint}</p>
+          )}
+          <div className="mt-1">
+            <input
+              type="number"
+              min={0}
+              max={20}
+              value={dogAgeYears}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!isNaN(v) && v >= 0 && v <= 20) onAgeChange(v);
+              }}
+              className="w-24 rounded-lg border border-border bg-surface px-3 py-2 text-sm tabular-nums outline-none focus:border-primary"
+            />
+          </div>
+        </label>
+
+        {/* Breed / size (read-only summary) */}
+        <div className="mt-4">
+          <span className="text-sm font-medium text-muted">{ins.breedLabel}</span>
+          <p className="mt-0.5 text-sm">
+            {selectedBreed
+              ? `${sizeLabels[size]?.label ?? size} · ${lang === "zh" ? selectedBreed.nameZh : selectedBreed.nameEn}`
+              : sizeLabels[size]?.label ?? size}
+            {isHighRiskBreed && (
+              <span className="ml-1 text-xs text-amber-600">({ins.highRiskNote})</span>
+            )}
+          </p>
+        </div>
+
+        {/* Region (read-only, from calculator city selection) */}
+        <div className="mt-4">
+          <span className="text-sm font-medium text-muted">{ins.regionLabel}</span>
+          {ins.regionHint && (
+            <p className="mt-0.5 text-xs text-muted/90">{ins.regionHint}</p>
+          )}
+          <p className="mt-1 text-sm font-medium">
+            {levelLabels[costLevel]?.label ?? costLevel}
+          </p>
+        </div>
+
+        {/* Plan structure */}
+        <div className="mt-4">
+          <span className="text-sm font-medium text-muted">{ins.planLabel}</span>
+
+          <div className="mt-2">
+            <span className="block text-xs text-muted">{ins.reimbursementLabel}</span>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {REIMBURSEMENT_OPTIONS.map((o) => (
+                <button
+                  key={o.key}
+                  onClick={() => onReimbursementChange(o.key)}
+                  className={`rounded-lg px-2.5 py-1.5 text-sm font-medium transition-all ${
+                    insuranceReimbursement === o.key
+                      ? "bg-primary text-white"
+                      : "bg-foreground/[.06] text-muted hover:bg-foreground/[.10]"
+                  }`}
+                >
+                  {o.pct}%
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <span className="block text-xs text-muted">{ins.deductibleLabel}</span>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {DEDUCTIBLE_OPTIONS.map((o) => (
+                <button
+                  key={o.key}
+                  onClick={() => onDeductibleChange(o.key)}
+                  className={`rounded-lg px-2.5 py-1.5 text-sm font-medium transition-all ${
+                    insuranceDeductible === o.key
+                      ? "bg-primary text-white"
+                      : "bg-foreground/[.06] text-muted hover:bg-foreground/[.10]"
+                  }`}
+                >
+                  ${o.val}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <span className="block text-xs text-muted">{ins.annualLimitLabel}</span>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {ANNUAL_LIMIT_OPTIONS.map((o) => (
+                <button
+                  key={o.key}
+                  onClick={() => onAnnualLimitChange(o.key)}
+                  className={`rounded-lg px-2.5 py-1.5 text-sm font-medium transition-all ${
+                    insuranceAnnualLimit === o.key
+                      ? "bg-primary text-white"
+                      : "bg-foreground/[.06] text-muted hover:bg-foreground/[.10]"
+                  }`}
+                >
+                  {o.key === "unlimited" ? ins.unlimited : `$${fmt(o.val)}`}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Get your own quote */}
+        {ins.getQuoteTitle && ins.getQuoteDesc && (
+          <div className="mt-5 rounded-lg border border-primary/20 bg-primary/5 p-4">
+            <h5 className="text-sm font-semibold text-foreground">
+              {ins.getQuoteTitle}
+            </h5>
+            <p className="mt-1.5 text-sm leading-relaxed text-muted">
+              {ins.getQuoteDesc}
+            </p>
+            {ins.getQuoteCompanies && ins.getQuoteCompanies.length > 0 && (
+              <ul className="mt-3 space-y-2">
+                {ins.getQuoteCompanies.map(
+                  (c: { name: string; url: string; features: string }, i: number) => (
+                    <li key={i} className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
+                      <a
+                        href={c.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm font-medium text-primary hover:underline shrink-0"
+                      >
+                        {c.name}
+                      </a>
+                      <span className="text-xs text-muted/90">{c.features}</span>
+                    </li>
+                  )
+                )}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* Custom amount override — highlighted */}
+        <div className="mt-5 rounded-xl border-2 border-amber-500/40 bg-amber-500/10 p-4">
+          <p className="text-sm font-semibold text-foreground">
+            {ins.customAmountLabel}
+          </p>
+          {ins.customAmountHint && (
+            <p className="mt-0.5 text-xs text-muted">{ins.customAmountHint}</p>
+          )}
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-base font-medium text-foreground">$</span>
+            <input
+              type="number"
+              placeholder={String(premium.estimate)}
+              value={customAmount}
+              onChange={(e) => onCustomAmountChange(e.target.value)}
+              className="w-28 rounded-lg border-2 border-amber-500/50 bg-background px-4 py-2.5 text-base font-semibold tabular-nums outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
+            />
+            <span className="text-sm font-medium text-muted">{t.calc.perMoShort}</span>
+          </div>
+          {customAmount && (
+            <button
+              type="button"
+              onClick={() => onCustomAmountChange("")}
+              className="mt-2 text-sm font-medium text-primary hover:underline"
+            >
+              {ins.customAmountClear}
+            </button>
+          )}
+        </div>
+
+        <p className="mt-4 text-xs text-muted/80">{ins.sourceNote}</p>
+
+        {ins.references && ins.references.length > 0 && (
+          <div className="mt-3">
+            <p className="text-xs font-medium text-muted">{ins.referencesTitle}</p>
+            <ul className="mt-1 space-y-0.5 text-xs text-muted/90">
+              {ins.references.map((ref: { name: string; url: string }, i: number) => (
+                <li key={i}>
+                  <a
+                    href={ref.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    {ref.name}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════ Food Detail Panel ═══════════════════ */
 
 function FoodDetail({
@@ -736,6 +1233,8 @@ function FoodDetail({
   onFoodTierChange,
   customFoodPrice,
   onPriceChange,
+  customAmount,
+  onCustomAmountChange,
   cityMult,
   adjustedCost,
   weightUnit,
@@ -753,6 +1252,8 @@ function FoodDetail({
   onFoodTierChange: (k: string) => void;
   customFoodPrice: string;
   onPriceChange: (v: string) => void;
+  customAmount: string;
+  onCustomAmountChange: (v: string) => void;
   cityMult: number;
   adjustedCost: number;
   weightUnit: "lb" | "kg";
@@ -965,6 +1466,33 @@ function FoodDetail({
             </div>
           </div>
         </div>
+
+        {/* Custom amount override */}
+        <div className="mt-4">
+          <label className="block text-sm font-medium text-muted">
+            {t.calc.customAmount}
+          </label>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="text-sm text-muted">$</span>
+            <input
+              type="number"
+              placeholder={String(adjustedCost)}
+              value={customAmount}
+              onChange={(e) => onCustomAmountChange(e.target.value)}
+              className="w-24 rounded-lg border border-border bg-surface px-3 py-2 text-sm tabular-nums outline-none focus:border-primary"
+            />
+            <span className="text-xs text-muted">{t.calc.perMoShort}</span>
+          </div>
+          {customAmount && (
+            <button
+              type="button"
+              onClick={() => onCustomAmountChange("")}
+              className="mt-1 text-sm text-primary hover:underline"
+            >
+              {ft.customAmountClear}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Sources ── */}
@@ -1079,35 +1607,49 @@ function Toggle({
   desc,
   checked,
   onChange,
+  onLabelClick,
 }: {
   label: string;
   desc: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  onLabelClick?: () => void;
 }) {
   return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className="flex w-full items-center justify-between rounded-xl border border-border/60 bg-surface p-4 text-left transition-colors hover:border-primary/30"
-    >
-      <div>
-        <p className="text-sm font-semibold">{label}</p>
-        <p className="text-xs text-muted">{desc}</p>
-      </div>
-      <div
-        className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-          checked ? "bg-primary" : "bg-foreground/15"
+    <div className="flex w-full items-center justify-between gap-3 rounded-xl border border-border/60 bg-surface p-4">
+      <button
+        type="button"
+        onClick={onLabelClick}
+        disabled={!onLabelClick}
+        className={`min-w-0 flex-1 text-left transition-colors ${
+          onLabelClick
+            ? "cursor-pointer hover:text-primary"
+            : "cursor-default"
         }`}
       >
+        <p className="text-sm font-semibold">{label}</p>
+        <p className="text-xs text-muted">{desc}</p>
+      </button>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className="shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      >
         <div
-          className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-            checked ? "translate-x-5" : ""
+          className={`relative h-6 w-11 rounded-full transition-colors ${
+            checked ? "bg-primary" : "bg-foreground/15"
           }`}
-        />
-      </div>
-    </button>
+        >
+          <div
+            className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+              checked ? "translate-x-5" : ""
+            }`}
+          />
+        </div>
+      </button>
+    </div>
   );
 }
 

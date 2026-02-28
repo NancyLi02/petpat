@@ -1,14 +1,15 @@
 "use client";
 
-/* Tech-forward color palette: cyan → blue → indigo → violet spectrum */
+import { useState } from "react";
+
+/* 青绿 → 青 → 蓝 → 靛蓝 → 深紫 → 灰 */
 const COLORS: Record<string, string> = {
   Food: "#0d9488",
-  Treats: "#14b8a6",
   "Preventive Meds": "#06b6d4",
-  Grooming: "#0ea5e9",
-  "Toys & Supplies": "#6366f1",
-  "Waste Bags": "#64748b",
-  Insurance: "#8b5cf6",
+  Treats: "#0ea5e9",
+  Grooming: "#6366f1",
+  "Toys & Supplies": "#6d28d9",
+  Insurance: "#64748b",
 };
 
 function polarToCartesian(cx: number, cy: number, r: number, deg: number) {
@@ -56,6 +57,7 @@ export function PieChart({
   showSliceLabels?: boolean;
   labelMap?: Record<string, string>;
 }) {
+  const [hoveredLabel, setHoveredLabel] = useState<string | null>(null);
   const cx = size / 2;
   const cy = size / 2;
   const rOuter = size / 2 - 2;
@@ -120,6 +122,8 @@ export function PieChart({
           return (
             <path
               key={s.label}
+              onMouseEnter={() => setHoveredLabel(s.label)}
+              onMouseLeave={() => setHoveredLabel(null)}
               d={describeDonutArc(
                 cx,
                 cy,
@@ -153,10 +157,12 @@ export function PieChart({
             const labelR = (rInner + rOuter) / 2;
             const pos = polarToCartesian(cx, cy, labelR, midDeg);
             const displayLabel = (labelMap && labelMap[s.label]) || s.label;
+            const isHovered = hoveredLabel === s.label;
             const shortLabel =
               displayLabel.length > 14
                 ? displayLabel.slice(0, 12) + "…"
                 : displayLabel;
+            const labelText = isHovered ? displayLabel : shortLabel;
             const fontSize = Math.max(9, Math.min(12, size / 18));
             return (
               <text
@@ -173,7 +179,7 @@ export function PieChart({
                     "0 0 2px #000, 0 0 4px #000, 0 1px 2px rgba(0,0,0,0.8)",
                 }}
               >
-                {shortLabel}
+                {labelText}
               </text>
             );
           })}
