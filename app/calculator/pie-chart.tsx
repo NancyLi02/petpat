@@ -6,8 +6,8 @@ import { useState } from "react";
 const COLORS: Record<string, string> = {
   Food: "#0d9488",
   "Preventive Meds": "#06b6d4",
-  Treats: "#0ea5e9",
-  Grooming: "#6366f1",
+  Treats: "#6366f1",
+  Grooming: "#0ea5e9",
   "Toys & Supplies": "#6d28d9",
   Insurance: "#64748b",
 };

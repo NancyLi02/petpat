@@ -58,6 +58,34 @@ const LBS_TO_KG = 0.453592;
 const FOOD_KCAL_PER_KG = 3600;
 const DAYS_PER_MONTH = 30.44;
 
+/* Puppy weight curve: fraction of adult weight by age (months). Linear interpolation between points. */
+const PUPPY_WEIGHT_POINTS: { month: number; factor: number }[] = [
+  { month: 0, factor: 0.1 },
+  { month: 1, factor: 0.2 },
+  { month: 2, factor: 0.35 },
+  { month: 3, factor: 0.5 },
+  { month: 4, factor: 0.62 },
+  { month: 5, factor: 0.72 },
+  { month: 6, factor: 0.8 },
+  { month: 8, factor: 0.89 },
+  { month: 10, factor: 0.95 },
+  { month: 12, factor: 1.0 },
+];
+
+function getPuppyWeightFactor(ageMonths: number): number {
+  if (ageMonths <= 0) return PUPPY_WEIGHT_POINTS[0].factor;
+  if (ageMonths >= 12) return 1;
+  for (let i = 0; i < PUPPY_WEIGHT_POINTS.length - 1; i++) {
+    const a = PUPPY_WEIGHT_POINTS[i];
+    const b = PUPPY_WEIGHT_POINTS[i + 1];
+    if (ageMonths >= a.month && ageMonths <= b.month) {
+      const t = (ageMonths - a.month) / (b.month - a.month);
+      return a.factor + t * (b.factor - a.factor);
+    }
+  }
+  return 1;
+}
+
 const COSTS = {
   initial: {
     adopt: { small: 150, medium: 250, large: 300, giant: 350 } as BySize,
@@ -73,14 +101,13 @@ const COSTS = {
   },
   monthly: {
     treats: { small: 10, medium: 15, large: 20, giant: 25 } as BySize,
-    preventive: { small: 25, medium: 30, large: 35, giant: 40 } as BySize,
-    grooming: { small: 40, medium: 55, large: 70, giant: 85 } as BySize,
     toysSupplies: 15,
     wasteBags: 10,
   },
   annual: {
     vetVisit: 250,
-    vaccines: 100,
+    vaccines: 105,
+    vaccinesPuppy: 275,
     dental: 300,
     license: 20,
   },
@@ -231,8 +258,8 @@ const adj = (base: number, mult: number) => Math.round(base * mult);
 const LEGEND_COLORS: Record<string, string> = {
   Food: "#0d9488",
   "Preventive Meds": "#06b6d4",
-  Treats: "#0ea5e9",
-  Grooming: "#6366f1",
+  Treats: "#6366f1",
+  Grooming: "#0ea5e9",
   "Toys & Supplies": "#6d28d9",
   Insurance: "#64748b",
 };
@@ -255,7 +282,6 @@ export default function Calculator() {
   const [insurance, setInsurance] = useState(false);
   const [training, setTraining] = useState(false);
   const [useTreats, setUseTreats] = useState(true);
-  const [useGrooming, setUseGrooming] = useState(true);
   const [useToysSupplies, setUseToysSupplies] = useState(true);
 
   /* ── food detail state (stored in lbs for consistent calc across unit switch) ── */
@@ -278,6 +304,14 @@ export default function Calculator() {
   const [insuranceAnnualLimit, setInsuranceAnnualLimit] =
     useState<"5000" | "10000" | "unlimited">("5000");
 
+  const [isPuppyFirstYear, setIsPuppyFirstYear] = useState(false);
+  const [puppyAgeMonths, setPuppyAgeMonths] = useState(3);
+
+  /* ── grooming mode: home | self | pro; frequency f (times/yr); equipment E for home ── */
+  const [groomingMode, setGroomingMode] = useState<"home" | "self" | "pro">("self");
+  const [groomingFreq, setGroomingFreq] = useState(12);
+  const [groomingEquipment, setGroomingEquipment] = useState(45);
+
   const handleSizeChange = (s: DogSize) => {
     setSize(s);
     setCustomWeightLbs(null);
@@ -286,10 +320,14 @@ export default function Calculator() {
   /* ── food computation ── */
   const defaultWeight =
     DOG_SIZE_KEYS.find((d) => d.key === size)!.defaultLbs;
-  const effectiveWeight =
+  const adultWeight =
     customWeightLbs != null
       ? Math.max(1, customWeightLbs)
       : defaultWeight;
+  const puppyFactor = getPuppyWeightFactor(puppyAgeMonths);
+  const effectiveWeight = isPuppyFirstYear
+    ? Math.max(1, adultWeight * puppyFactor)
+    : adultWeight;
   const activityFactor = ACTIVITY_FACTORS[activityKey] ?? 1.6;
   const tierPrice = FOOD_TIER_PRICES[foodTierKey] ?? 2.5;
   const effectiveFoodPrice = customFoodPrice
@@ -380,8 +418,24 @@ export default function Calculator() {
     const totalInitial = acqCost + spayNeuter + initVet + microchip + supplies;
 
     const treats = adj(COSTS.monthly.treats[size], m);
-    const preventive = adj(COSTS.monthly.preventive[size], m);
-    const grooming = adj(COSTS.monthly.grooming[size], m);
+    const vaccinesAnnual = adj(
+      isPuppyFirstYear ? COSTS.annual.vaccinesPuppy : COSTS.annual.vaccines,
+      m,
+    );
+    const allInOneBase = 18 + 0.18 * effectiveWeight;
+    const allInOneMo = adj(Math.round(allInOneBase), m);
+    const vaccinesMonthly = Math.round(vaccinesAnnual / 12);
+    const preventive = allInOneMo + vaccinesMonthly;
+
+    const f = groomingFreq;
+    const W = effectiveWeight;
+    const groomingAnnual =
+      groomingMode === "home"
+        ? f * 0.12 * W + groomingEquipment
+        : groomingMode === "self"
+          ? f * (12 + 0.25 * W)
+          : f * (35 + 0.9 * W);
+    const grooming = adj(Math.round(groomingAnnual / 12), m);
     const toysSupplies = adj(COSTS.monthly.toysSupplies, m);
     const wasteBags = adj(COSTS.monthly.wasteBags, m);
     const toysSuppliesWithWaste = toysSupplies + wasteBags;
@@ -390,8 +444,8 @@ export default function Calculator() {
     const baseItems: { label: string; value: number }[] = [
       { label: "Food", value: food },
       { label: "Preventive Meds", value: preventive },
+      { label: "Grooming", value: grooming },
       ...(useTreats ? [{ label: "Treats", value: treats }] : []),
-      ...(useGrooming ? [{ label: "Grooming", value: grooming }] : []),
       ...(useToysSupplies
         ? [{ label: "Toys & Supplies", value: toysSuppliesWithWaste }]
         : []),
@@ -428,21 +482,27 @@ export default function Calculator() {
     const totalMonthlyAll = monthlyItemsAll.reduce((s, i) => s + i.value, 0);
 
     const vetVisit = adj(COSTS.annual.vetVisit, m);
-    const vaccines = adj(COSTS.annual.vaccines, m);
     const dental = adj(COSTS.annual.dental, m);
     const license = adj(COSTS.annual.license, m);
     const trainingCost = training ? adj(COSTS.optional.training, m) : 0;
-    const totalAnnualFixed = vetVisit + vaccines + dental + license;
+    const totalAnnualFixed = vetVisit + dental + license;
 
     const annualItems = [
       { label: "Vet Wellness Visit", value: vetVisit },
-      { label: "Vaccines & Boosters", value: vaccines },
       { label: "Dental Cleaning", value: dental },
       { label: "License / Registration", value: license },
     ];
 
     const annualTotal = totalMonthly * 12 + totalAnnualFixed;
     const firstYear = annualTotal + totalInitial + trainingCost;
+
+    const groomingBreakdown = {
+      mode: groomingMode,
+      freq: f,
+      weightLbs: W,
+      annual: groomingAnnual,
+      equipment: groomingMode === "home" ? groomingEquipment : 0,
+    };
 
     return {
       initial: {
@@ -467,6 +527,13 @@ export default function Calculator() {
         total: totalMonthly,
         itemsAll: monthlyItemsAll,
         totalAll: totalMonthlyAll,
+        preventiveBreakdown: {
+          allInOneMo,
+          vaccinesAnnual,
+          vaccinesMonthly,
+          weightLbs: effectiveWeight,
+        },
+        groomingBreakdown,
       },
       annual: { items: annualItems, total: totalAnnualFixed },
       summary: { monthly: totalMonthly, annual: annualTotal, firstYear },
@@ -482,11 +549,15 @@ export default function Calculator() {
     acquisition,
     insurance,
     insurancePremium,
+    isPuppyFirstYear,
     training,
     useTreats,
-    useGrooming,
     useToysSupplies,
     foodCalc.monthlyCost,
+    effectiveWeight,
+    groomingMode,
+    groomingFreq,
+    groomingEquipment,
     customOverrides,
   ]);
 
@@ -588,6 +659,33 @@ export default function Calculator() {
         onDeductibleChange={setInsuranceDeductible}
         insuranceAnnualLimit={insuranceAnnualLimit}
         onAnnualLimitChange={setInsuranceAnnualLimit}
+      />
+    ) : selectedDetail === "Preventive Meds" ? (
+      <PreventiveDetail
+        t={t}
+        breakdown={costs.monthly.preventiveBreakdown}
+        value={detailItems.find((i) => i.label === "Preventive Meds")?.value ?? 0}
+        customAmount={customOverrides["Preventive Meds"] ?? ""}
+        onCustomAmountChange={(v) =>
+          setCustomOverrides((o) => ({ ...o, "Preventive Meds": v }))
+        }
+        isPuppyFirstYear={isPuppyFirstYear}
+      />
+    ) : selectedDetail === "Grooming" ? (
+      <GroomingDetail
+        t={t}
+        breakdown={costs.monthly.groomingBreakdown}
+        value={detailItems.find((i) => i.label === "Grooming")?.value ?? 0}
+        customAmount={customOverrides.Grooming ?? ""}
+        onCustomAmountChange={(v) =>
+          setCustomOverrides((o) => ({ ...o, Grooming: v }))
+        }
+        mode={groomingMode}
+        onModeChange={setGroomingMode}
+        freq={groomingFreq}
+        onFreqChange={(n) => setGroomingFreq(n)}
+        equipment={groomingEquipment}
+        onEquipmentChange={setGroomingEquipment}
       />
     ) : selectedDetail ? (
       <div className="rounded-xl border border-border/60 bg-surface/60 p-6">
@@ -791,6 +889,38 @@ export default function Calculator() {
             total={costs.monthly.total}
             suffix={t.calc.perMo}
           >
+            {/* Puppy first year toggle — at top for easy first-year vs later comparison */}
+            <div className="mb-4">
+              <Toggle
+                label={t.calc.puppyFirstYearLabel}
+                desc={t.calc.puppyFirstYearDesc}
+                checked={isPuppyFirstYear}
+                onChange={setIsPuppyFirstYear}
+              />
+              {isPuppyFirstYear && (
+                <div className="mt-3 flex items-center gap-3 rounded-lg border border-border/40 bg-surface/40 px-4 py-3">
+                  <label className="text-sm font-medium text-muted">
+                    {t.calc.puppyAgeLabel}
+                  </label>
+                  <select
+                    value={puppyAgeMonths}
+                    onChange={(e) =>
+                      setPuppyAgeMonths(Number(e.target.value))
+                    }
+                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm tabular-nums outline-none focus:border-primary"
+                  >
+                    {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((mo) => (
+                      <option key={mo} value={mo}>
+                        {mo} {t.calc.puppyAgeUnit}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-muted">
+                    {t.calc.puppyAgeHint}
+                  </span>
+                </div>
+              )}
+            </div>
             {/* Optional items toggles */}
             <div className="mb-4 grid gap-3 sm:grid-cols-2">
               <Toggle
@@ -799,13 +929,6 @@ export default function Calculator() {
                 checked={useTreats}
                 onChange={setUseTreats}
                 onLabelClick={() => setCostDetailView("Treats")}
-              />
-              <Toggle
-                label={t.calc.groomingLabel}
-                desc={t.calc.groomingDesc}
-                checked={useGrooming}
-                onChange={setUseGrooming}
-                onLabelClick={() => setCostDetailView("Grooming")}
               />
               <Toggle
                 label={t.calc.toysSuppliesLabel}
@@ -943,6 +1066,278 @@ export default function Calculator() {
         </section>
       </div>
     </main>
+  );
+}
+
+/* ═══════════════════ Preventive Detail Panel ═══════════════════ */
+
+function PreventiveDetail({
+  t,
+  breakdown,
+  value,
+  customAmount,
+  onCustomAmountChange,
+  isPuppyFirstYear,
+}: {
+  t: ReturnType<typeof useT>;
+  breakdown: {
+    allInOneMo: number;
+    vaccinesAnnual: number;
+    vaccinesMonthly: number;
+    weightLbs: number;
+  };
+  value: number;
+  customAmount: string;
+  onCustomAmountChange: (v: string) => void;
+  isPuppyFirstYear: boolean;
+}) {
+  const pd = t.calc.preventiveDetail;
+  const fmt = (n: number) => n.toLocaleString("en-US");
+
+  return (
+    <div className="mb-3 mt-2 rounded-xl border border-border/60 bg-background p-5">
+      <h4 className="text-base font-semibold">{pd.preventiveTitle}</h4>
+      <p className="mt-1 text-sm leading-relaxed text-muted">
+        {pd.preventiveDesc}
+      </p>
+      <p className="mt-2 text-xs font-medium text-muted">
+        {pd.preventiveFormula.replace("{w}", String(Math.round(breakdown.weightLbs)))}
+      </p>
+      {isPuppyFirstYear && (
+        <p className="mt-1 text-xs text-amber-600">{pd.puppyNote}</p>
+      )}
+
+      {/* Item breakdown */}
+      <div className="mt-4 space-y-2 rounded-lg border border-border/40 bg-surface/40 p-4">
+        <div className="flex justify-between text-sm">
+          <span className="text-muted">{pd.allInOneLabel}</span>
+          <span className="font-medium tabular-nums">${fmt(breakdown.allInOneMo)}/mo</span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span className="text-muted">{pd.vaccinesLabel}</span>
+          <span className="font-medium tabular-nums">
+            ${fmt(breakdown.vaccinesAnnual)}/yr (${fmt(breakdown.vaccinesMonthly)}/mo)
+          </span>
+        </div>
+        <div className="flex justify-between border-t border-border/60 pt-2 text-sm font-semibold">
+          <span>{pd.totalLabel}</span>
+          <span className="tabular-nums">${fmt(value)}/mo</span>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <label className="block text-sm font-medium text-muted">
+          {t.calc.customAmount}
+        </label>
+        <div className="mt-1 flex items-center gap-2">
+          <span className="text-sm text-muted">$</span>
+          <input
+            type="number"
+            placeholder={String(value)}
+            value={customAmount}
+            onChange={(e) => onCustomAmountChange(e.target.value)}
+            className="w-24 rounded-lg border border-border bg-surface px-3 py-2 text-sm tabular-nums outline-none focus:border-primary"
+          />
+          <span className="text-xs text-muted">{t.calc.perMoShort}</span>
+        </div>
+      </div>
+
+      {pd.purchaseLinks && pd.purchaseLinks.length > 0 && (
+        <div className="mt-4 border-t border-border/40 pt-4">
+          <p className="text-xs font-medium text-muted">{pd.purchaseLinksTitle}</p>
+          <ul className="mt-1 space-y-0.5 text-xs text-muted/90">
+            {pd.purchaseLinks.map(
+              (link: { name: string; url: string }, i: number) => (
+                <li key={i}>
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    {link.name}
+                  </a>
+                </li>
+              )
+            )}
+          </ul>
+        </div>
+      )}
+      {pd.references && pd.references.length > 0 && (
+        <div className="mt-4 border-t border-border/40 pt-4">
+          <p className="text-xs font-medium text-muted">{pd.referencesTitle}</p>
+          <ul className="mt-1 space-y-0.5 text-xs text-muted/90">
+            {pd.references.map(
+              (ref: { name: string; url: string }, i: number) => (
+                <li key={i}>
+                  <a
+                    href={ref.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    {ref.name}
+                  </a>
+                </li>
+              )
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════ Grooming Detail Panel ═══════════════════ */
+
+function GroomingDetail({
+  t,
+  breakdown,
+  value,
+  customAmount,
+  onCustomAmountChange,
+  mode,
+  onModeChange,
+  freq,
+  onFreqChange,
+  equipment,
+  onEquipmentChange,
+}: {
+  t: ReturnType<typeof useT>;
+  breakdown: {
+    mode: "home" | "self" | "pro";
+    freq: number;
+    weightLbs: number;
+    annual: number;
+    equipment: number;
+  };
+  value: number;
+  customAmount: string;
+  onCustomAmountChange: (v: string) => void;
+  mode: "home" | "self" | "pro";
+  onModeChange: (m: "home" | "self" | "pro") => void;
+  freq: number;
+  onFreqChange: (n: number) => void;
+  equipment: number;
+  onEquipmentChange: (n: number) => void;
+}) {
+  const gd = t.calc.groomingDetail;
+  const fmt = (n: number) => n.toLocaleString("en-US");
+
+  return (
+    <div className="mb-3 mt-2 rounded-xl border border-border/60 bg-background p-5">
+      <h4 className="text-base font-semibold">{gd.title}</h4>
+      <p className="mt-1 text-sm leading-relaxed text-muted">
+        {gd.desc}
+      </p>
+
+      {/* Mode selection */}
+      <div className="mt-4">
+        <label className="block text-sm font-medium text-muted">
+          {gd.modeLabel}
+        </label>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+            {(["home", "self", "pro"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => onModeChange(m)}
+                className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                  mode === m
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-surface/60 text-muted hover:border-primary/50"
+                }`}
+              >
+                {m === "home" ? gd.modeHome : m === "self" ? gd.modeSelf : gd.modePro}
+              </button>
+            ))}
+        </div>
+      </div>
+
+      {/* Frequency */}
+      <div className="mt-4">
+        <label className="block text-sm font-medium text-muted">
+          {gd.freqLabel}
+        </label>
+        <div className="mt-1 flex items-center gap-2">
+          <input
+            type="number"
+            min={1}
+            max={52}
+            value={freq}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              if (!isNaN(n) && n >= 1 && n <= 52) onFreqChange(n);
+            }}
+            className="w-20 rounded-lg border border-border bg-surface px-3 py-2 text-sm tabular-nums outline-none focus:border-primary"
+          />
+          <span className="text-xs text-muted">{gd.freqUnit}</span>
+        </div>
+      </div>
+
+      {/* Equipment (home only) */}
+      {mode === "home" && (
+        <div className="mt-4">
+          <label className="block text-sm font-medium text-muted">
+            {gd.equipmentLabel}
+          </label>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="text-sm text-muted">$</span>
+            <input
+              type="number"
+              min={0}
+              max={200}
+              value={equipment}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                if (!isNaN(n) && n >= 0 && n <= 200) onEquipmentChange(n);
+              }}
+              className="w-20 rounded-lg border border-border bg-surface px-3 py-2 text-sm tabular-nums outline-none focus:border-primary"
+            />
+            <span className="text-xs text-muted">{gd.equipmentUnit}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Breakdown */}
+      <div className="mt-4 space-y-2 rounded-lg border border-border/40 bg-surface/40 p-4">
+        <div className="flex justify-between text-sm">
+          <span className="text-muted">{gd.weightLabel}</span>
+          <span className="font-medium tabular-nums">{fmt(Math.round(breakdown.weightLbs))} lb</span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span className="text-muted">{gd.annualLabel}</span>
+          <span className="font-medium tabular-nums">${fmt(Math.round(breakdown.annual))}/yr</span>
+        </div>
+        {breakdown.equipment > 0 && (
+          <div className="flex justify-between text-sm">
+            <span className="text-muted">{gd.equipmentLine}</span>
+            <span className="font-medium tabular-nums">${fmt(breakdown.equipment)}/yr</span>
+          </div>
+        )}
+        <div className="flex justify-between border-t border-border/60 pt-2 text-sm font-semibold">
+          <span>{gd.totalLabel}</span>
+          <span className="tabular-nums">${fmt(value)}/mo</span>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <label className="block text-sm font-medium text-muted">
+          {t.calc.customAmount}
+        </label>
+        <div className="mt-1 flex items-center gap-2">
+          <span className="text-sm text-muted">$</span>
+          <input
+            type="number"
+            placeholder={String(value)}
+            value={customAmount}
+            onChange={(e) => onCustomAmountChange(e.target.value)}
+            className="w-24 rounded-lg border border-border bg-surface px-3 py-2 text-sm tabular-nums outline-none focus:border-primary"
+          />
+          <span className="text-xs text-muted">{t.calc.perMoShort}</span>
+        </div>
+      </div>
+    </div>
   );
 }
 
